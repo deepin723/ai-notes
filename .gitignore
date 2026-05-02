@@ -12,8 +12,8 @@ client/.vite/
 .env.local
 server/.env
 
-# Note data (local user data, not part of source code)
-server/data/
+# Note data — tracked in git as seed data for deployment
+# server/data/
 
 # Lock files from other package managers
 yarn.lock

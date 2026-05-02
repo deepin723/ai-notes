@@ -217,5 +217,12 @@ Rules:
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
+// Serve built frontend in production
+const PUBLIC_DIR = path.join(__dirname, 'public')
+if (fs.existsSync(PUBLIC_DIR)) {
+  app.use(express.static(PUBLIC_DIR))
+  app.get('*', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')))
+}
+
 const PORT = process.env.PORT || 3004
 app.listen(PORT, () => console.log(`📝 ai-notes server: http://localhost:${PORT}`))
