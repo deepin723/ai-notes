@@ -232,6 +232,26 @@ Rules:
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
+// One-time migration: move root data/*.md into data/{userId}/
+app.post('/api/migrate', (req, res) => {
+  const { secret, userId } = req.body
+  if (secret !== process.env.MIGRATE_SECRET || !userId) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const files = fs.readdirSync(BASE_DATA_DIR).filter(f => f.endsWith('.md'))
+  const dest = userDir(userId)
+  let moved = 0
+  for (const f of files) {
+    const src = path.join(BASE_DATA_DIR, f)
+    const dst = path.join(dest, f)
+    if (!fs.existsSync(dst)) {
+      fs.renameSync(src, dst)
+      moved++
+    }
+  }
+  res.json({ moved, total: files.length })
+})
+
 // Serve built frontend in production
 const PUBLIC_DIR = path.join(__dirname, 'public')
 if (fs.existsSync(PUBLIC_DIR)) {
