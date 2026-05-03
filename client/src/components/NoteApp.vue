@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
 import { useUser, useClerk } from '@clerk/vue'
+import GraphView from './GraphView.vue'
 
 const props = defineProps<{ apiKey: string; baseUrl: string; getToken: () => Promise<string | null> }>()
 const emit = defineEmits<{ settings: [] }>()
@@ -21,7 +22,7 @@ const userInitial = computed(() => {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type NoteType = 'raw' | 'entity' | 'concept' | 'summary' | 'synthesis' | 'comparison' | 'qa'
-type ViewMode = 'list' | 'editor' | 'viewer'
+type ViewMode = 'list' | 'editor' | 'viewer' | 'graph'
 
 interface NoteMeta {
   id: string
@@ -103,6 +104,21 @@ let compileProgressTimer: ReturnType<typeof setInterval> | null = null
 
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
+
+// ── Delete Confirmation ───────────────────────────────────────────────────
+const confirmDeleteId = ref<string | null>(null)
+let confirmDeleteTimer: ReturnType<typeof setTimeout> | null = null
+
+const startDelete = (id: string) => {
+  confirmDeleteId.value = id
+  if (confirmDeleteTimer) clearTimeout(confirmDeleteTimer)
+  confirmDeleteTimer = setTimeout(() => { confirmDeleteId.value = null }, 4000)
+}
+
+const cancelDelete = () => {
+  confirmDeleteId.value = null
+  if (confirmDeleteTimer) clearTimeout(confirmDeleteTimer)
+}
 
 // ── Computed ───────────────────────────────────────────────────────────────
 const filteredNotes = computed(() => {
@@ -420,9 +436,17 @@ onUnmounted(() => {
       <!-- Nav -->
       <nav class="nav">
         <button
+          class="nav-item" :class="{ active: view === 'graph' }"
+          @click="view = 'graph'; activeTag = null; searchQuery = ''"
+        >
+          <span class="nav-icon" style="color: #818CF8">⬡</span>
+          <span class="nav-label">知识图谱</span>
+        </button>
+        <div class="nav-divider" />
+        <button
           v-for="type in (['all', 'raw', 'entity', 'concept', 'summary', 'synthesis', 'comparison', 'qa'] as const)"
           :key="type"
-          class="nav-item" :class="{ active: selectedType === type && !activeTag }"
+          class="nav-item" :class="{ active: selectedType === type && !activeTag && view !== 'graph' }"
           @click="selectedType = type; view = 'list'; activeTag = null; searchQuery = ''"
         >
           <span class="nav-icon" :style="type !== 'all' ? { color: TYPE_COLORS[type as NoteType] } : {}">
@@ -612,6 +636,13 @@ onUnmounted(() => {
         </div>
       </template>
 
+      <!-- GRAPH VIEW -->
+      <template v-else-if="view === 'graph'">
+        <div class="graph-container">
+          <GraphView :notes="notes" @open-note="id => { openNote(id) }" />
+        </div>
+      </template>
+
       <!-- VIEWER VIEW -->
       <template v-else-if="view === 'viewer' && currentNote">
         <div class="viewer-header">
@@ -641,7 +672,12 @@ onUnmounted(() => {
               {{ copiedNote ? '已复制' : '复制' }}
             </button>
             <button v-if="currentNote.type === 'raw'" class="btn-ghost-sm" @click="openEditor(currentNote)">编辑</button>
-            <button class="btn-delete" @click="deleteNote(currentNote.id)">
+            <template v-if="confirmDeleteId === currentNote.id">
+              <span class="delete-confirm-text">确定删除？</span>
+              <button class="btn-confirm-del" @click="deleteNote(currentNote.id); confirmDeleteId = null">删除</button>
+              <button class="btn-ghost-sm" @click="cancelDelete">取消</button>
+            </template>
+            <button v-else class="btn-delete" @click="startDelete(currentNote.id)">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
                 <polyline points="2,4 14,4"/><path d="M5 4V2h6v2"/><path d="M6 7v5M10 7v5"/><rect x="3" y="4" width="10" height="10" rx="1"/>
               </svg>
@@ -1656,6 +1692,42 @@ onUnmounted(() => {
   font-family: inherit;
 }
 .link-btn:hover { background: rgba(99,102,241,0.14); }
+
+.nav-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 10px;
+}
+
+/* ── Graph ── */
+.graph-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Delete Confirmation ── */
+.delete-confirm-text {
+  font-size: 12px;
+  color: #F87171;
+}
+
+.btn-confirm-del {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 7px;
+  color: #F87171;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-confirm-del:hover { background: rgba(248, 113, 113, 0.22); }
 
 /* ── Spinner ── */
 .spinner {
