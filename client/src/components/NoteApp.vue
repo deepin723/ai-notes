@@ -1,9 +1,23 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
+import { useUser, useClerk } from '@clerk/vue'
 
 const props = defineProps<{ apiKey: string; baseUrl: string; getToken: () => Promise<string | null> }>()
 const emit = defineEmits<{ settings: [] }>()
+
+const { user } = useUser()
+const { signOut } = useClerk()
+
+const userDisplayName = computed(() => {
+  if (!user.value) return ''
+  return user.value.fullName || user.value.primaryEmailAddress?.emailAddress || ''
+})
+
+const userInitial = computed(() => {
+  const name = user.value?.fullName || user.value?.primaryEmailAddress?.emailAddress || '?'
+  return name[0].toUpperCase()
+})
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type NoteType = 'raw' | 'entity' | 'concept' | 'summary' | 'synthesis' | 'comparison' | 'qa'
@@ -434,6 +448,18 @@ onUnmounted(() => {
       </div>
 
       <div class="sidebar-foot">
+        <div class="user-row">
+          <img v-if="user?.imageUrl" :src="user.imageUrl" class="user-avatar" :alt="userDisplayName" />
+          <div v-else class="user-avatar-fallback">{{ userInitial }}</div>
+          <span class="user-name" :title="userDisplayName">{{ userDisplayName }}</span>
+          <button class="btn-signout" title="退出登录" @click="signOut()">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+              <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>
+              <polyline points="11,11 14,8 11,5"/>
+              <line x1="14" y1="8" x2="6" y2="8"/>
+            </svg>
+          </button>
+        </div>
         <button class="btn-settings" @click="emit('settings')">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15">
             <circle cx="10" cy="10" r="2.5"/>
@@ -919,7 +945,64 @@ onUnmounted(() => {
 .sidebar-foot {
   padding: 12px 8px;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.user-avatar-fallback {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.25);
+  color: var(--accent-lt);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-signout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.btn-signout:hover { color: #F87171; background: rgba(248,113,113,0.08); }
 
 .btn-settings {
   display: flex;
