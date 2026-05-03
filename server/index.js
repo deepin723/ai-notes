@@ -11,9 +11,30 @@ import { clerkMiddleware, getAuth } from '@clerk/express'
 dotenv.config()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const BASE_DATA_DIR = path.join(__dirname, 'data')
+
+// Use a persistent volume on Railway (DATA_DIR=/data), fall back to local server/data/ for dev
+const BASE_DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, 'data')
 
 if (!fs.existsSync(BASE_DATA_DIR)) fs.mkdirSync(BASE_DATA_DIR, { recursive: true })
+
+// On first volume deploy: seed git-tracked notes into the volume (skip if file already exists)
+if (process.env.DATA_DIR) {
+  const seedDir = path.join(__dirname, 'data')
+  if (fs.existsSync(seedDir)) {
+    for (const entry of fs.readdirSync(seedDir)) {
+      const srcUser = path.join(seedDir, entry)
+      if (!fs.statSync(srcUser).isDirectory()) continue
+      const dstUser = path.join(BASE_DATA_DIR, entry)
+      if (!fs.existsSync(dstUser)) fs.mkdirSync(dstUser, { recursive: true })
+      for (const file of fs.readdirSync(srcUser)) {
+        const dst = path.join(dstUser, file)
+        if (!fs.existsSync(dst)) fs.copyFileSync(path.join(srcUser, file), dst)
+      }
+    }
+  }
+}
 
 const app = express()
 app.use(cors())
