@@ -157,7 +157,7 @@ app.post('/api/compile/:id', requireUser, async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt5.4',
+        model: 'gpt-5.4',
         messages: [
           {
             role: 'system',
