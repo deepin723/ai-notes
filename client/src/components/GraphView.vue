@@ -36,8 +36,8 @@ interface GNode { id: string; title: string; type: NoteType; x: number; y: numbe
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const nodeCount = ref(0)
 const edgeCount = ref(0)
+const hiddenTypes = reactive(new Set<NoteType>())
 
-// Context menu
 const ctxMenu = reactive({
   visible: false,
   x: 0, y: 0,
@@ -50,12 +50,12 @@ let rafId: number | null = null
 let ro: ResizeObserver | null = null
 let gNodes: GNode[] = []
 let gEdges: [number, number][] = []
+let gDegree: number[] = []
 let hovered: GNode | null = null
 let dragNode: GNode | null = null
 let dragMoved = false
 let isPanning = false
 let panStart = { x: 0, y: 0 }
-let prevNoteIds = new Set<string>()
 
 const tr = { x: 0, y: 0, s: 1 }
 
@@ -93,9 +93,12 @@ function buildGraph(W: number, H: number) {
     }
   }
 
+  // Compute per-node degree for size scaling
+  gDegree = new Array(gNodes.length).fill(0)
+  for (const [i, j] of gEdges) { gDegree[i]++; gDegree[j]++ }
+
   nodeCount.value = gNodes.length
   edgeCount.value = gEdges.length
-  prevNoteIds = new Set(props.notes.map(n => n.id))
 }
 
 function simulate(W: number, H: number) {
@@ -164,8 +167,9 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
     }
   }
 
-  // Edges
+  // Edges — skip if either endpoint is a hidden type
   for (const [i, j] of gEdges) {
+    if (hiddenTypes.has(gNodes[i].type) || hiddenTypes.has(gNodes[j].type)) continue
     const lit = hi >= 0 && (i === hi || j === hi)
     ctx.strokeStyle = lit ? 'rgba(129,140,248,0.85)' : 'rgba(129,140,248,0.22)'
     ctx.lineWidth = (lit ? 1.8 : 1) / tr.s
@@ -181,16 +185,20 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
 
   for (let i = 0; i < gNodes.length; i++) {
     const nd = gNodes[i]
+    if (hiddenTypes.has(nd.type)) continue
+
     const isH = nd === hovered
     const isC = connected.has(i)
     const dimmed = hi >= 0 && !isH && !isC
     const isCompiling = props.compilingIds.has(nd.id)
     const color = TYPE_COLORS[nd.type]
-    const r = isH ? 9 : isC ? 7 : 5
+
+    // Size scales with degree (hub nodes appear larger)
+    const baseR = 4 + Math.min((gDegree[i] || 0) * 1.5, 7)
+    const r = isH ? baseR + 4 : isC ? baseR + 2 : baseR
 
     ctx.globalAlpha = dimmed ? 0.18 : 1
 
-    // Compiling pulse ring
     if (isCompiling) {
       const pulse = (Math.sin(now / 280) + 1) / 2
       const pr = r + 5 + pulse * 9
@@ -203,7 +211,6 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
       ctx.stroke()
     }
 
-    // Hover glow
     if (isH) {
       const g = ctx.createRadialGradient(nd.x, nd.y, 0, nd.x, nd.y, r + 14)
       g.addColorStop(0, color + '99')
@@ -219,7 +226,6 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
     ctx.fillStyle = color
     ctx.fill()
 
-    // "Raw uncompiled" indicator ring
     if (nd.type === 'raw') {
       ctx.strokeStyle = color + '55'
       ctx.lineWidth = 1 / tr.s
@@ -254,6 +260,7 @@ function loop() {
 function hitTest(wx: number, wy: number): GNode | null {
   const hr = 12 / tr.s
   for (let i = gNodes.length - 1; i >= 0; i--) {
+    if (hiddenTypes.has(gNodes[i].type)) continue
     const dx = gNodes[i].x - wx, dy = gNodes[i].y - wy
     if (dx*dx + dy*dy < hr*hr) return gNodes[i]
   }
@@ -275,7 +282,6 @@ function onContextMenu(e: MouseEvent) {
   if (!hit) { closeCtxMenu(); return }
 
   const c = canvasRef.value!
-  // Clamp menu to canvas bounds
   const menuW = 200, menuH = 130
   ctxMenu.x = Math.min(sx, c.offsetWidth  - menuW)
   ctxMenu.y = Math.min(sy, c.offsetHeight - menuH)
@@ -328,7 +334,6 @@ function onMouseUp() {
 function onWheel(e: WheelEvent) {
   e.preventDefault()
   const [sx, sy] = getPos(e)
-  // Gentler zoom: 0.95 / 1.053 instead of 0.9 / 1.11
   const factor = e.deltaY > 0 ? 0.95 : 1.053
   const ns = Math.max(0.12, Math.min(5, tr.s * factor))
   tr.x = sx - (sx - tr.x) * (ns / tr.s)
@@ -338,6 +343,42 @@ function onWheel(e: WheelEvent) {
 
 function onMouseLeave() {
   hovered = null; dragNode = null; isPanning = false
+}
+
+function fitToScreen() {
+  const c = canvasRef.value
+  const visible = gNodes.filter(n => !hiddenTypes.has(n.type))
+  if (!c || !visible.length) return
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const n of visible) {
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y)
+    maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y)
+  }
+  const W = c.width, H = c.height, pad = 80
+  const scaleX = (W - pad * 2) / (maxX - minX || 1)
+  const scaleY = (H - pad * 2) / (maxY - minY || 1)
+  tr.s = Math.min(scaleX, scaleY, 2.5)
+  tr.x = W / 2 - tr.s * (minX + maxX) / 2
+  tr.y = H / 2 - tr.s * (minY + maxY) / 2
+}
+
+function exportGraph() {
+  const c = canvasRef.value
+  if (!c) return
+  c.toBlob(blob => {
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'vki-graph.png'
+    a.click()
+    URL.revokeObjectURL(url)
+  })
+}
+
+function toggleType(type: NoteType) {
+  if (hiddenTypes.has(type)) hiddenTypes.delete(type)
+  else hiddenTypes.add(type)
 }
 
 function initCanvas() {
@@ -350,7 +391,6 @@ function initCanvas() {
   loop()
 }
 
-// When new notes arrive (after compile): preserve positions, spawn new nodes from source
 watch(() => props.notes.length, () => {
   const c = canvasRef.value
   if (!c) return
@@ -363,7 +403,6 @@ watch(() => props.notes.length, () => {
     if (saved) {
       node.x = saved.x; node.y = saved.y; node.vx = saved.vx; node.vy = saved.vy
     } else {
-      // New node: spawn from source position with burst velocity
       const note = props.notes.find(n => n.id === node.id)
       const srcId = note?.sourceId
       if (srcId) {
@@ -437,11 +476,35 @@ onUnmounted(() => {
       &nbsp;·&nbsp; 右键节点操作 &nbsp;·&nbsp; 滚轮缩放 &nbsp;·&nbsp; 拖拽移动
     </div>
 
+    <!-- Toolbar: fit + export -->
+    <div class="graph-toolbar">
+      <button class="graph-btn" title="适应屏幕" @click="fitToScreen">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14">
+          <path d="M1 5V2h3M12 2h3v3M15 11v3h-3M4 14H1v-3"/>
+        </svg>
+      </button>
+      <button class="graph-btn" title="导出图谱 PNG" @click="exportGraph">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14">
+          <path d="M8 2v8M5 7l3 3 3-3"/><path d="M2 12v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Legend: click to toggle type visibility -->
     <div class="graph-legend">
-      <div v-for="(color, type) in TYPE_COLORS" :key="type" class="legend-item">
-        <span class="legend-dot" :style="{ background: color }" />
+      <div
+        v-for="(color, type) in TYPE_COLORS" :key="type"
+        class="legend-item"
+        :class="{ 'legend-item--hidden': hiddenTypes.has(type as NoteType) }"
+        @click="toggleType(type as NoteType)"
+      >
+        <span
+          class="legend-dot"
+          :style="{ background: hiddenTypes.has(type as NoteType) ? 'rgba(255,255,255,0.15)' : color }"
+        />
         <span>{{ TYPE_LABELS[type as NoteType] }}</span>
       </div>
+      <div class="legend-hint">点击过滤</div>
     </div>
 
     <div v-if="!nodeCount" class="graph-empty">
@@ -481,6 +544,34 @@ onUnmounted(() => {
   backdrop-filter: blur(8px);
 }
 
+.graph-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 20px;
+  display: flex;
+  gap: 6px;
+}
+
+.graph-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: rgba(10, 13, 20, 0.8);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: rgba(148, 163, 184, 0.7);
+  cursor: pointer;
+  transition: all 0.15s;
+  backdrop-filter: blur(8px);
+}
+.graph-btn:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #A5B4FC;
+}
+
 .graph-legend {
   position: absolute;
   bottom: 20px;
@@ -497,8 +588,34 @@ onUnmounted(() => {
   backdrop-filter: blur(8px);
 }
 
-.legend-item { display: flex; align-items: center; gap: 7px; }
-.legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  user-select: none;
+  padding: 1px 2px;
+  border-radius: 4px;
+}
+.legend-item:hover { opacity: 0.75; }
+.legend-item--hidden { opacity: 0.32; }
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.legend-hint {
+  font-size: 9px;
+  color: rgba(100, 116, 139, 0.5);
+  text-align: center;
+  margin-top: 2px;
+  pointer-events: none;
+}
 
 .graph-empty {
   position: absolute;
@@ -512,7 +629,7 @@ onUnmounted(() => {
 }
 </style>
 
-<!-- Context menu styles in global scope via Teleport -->
+<!-- Context menu styles (global, via Teleport) -->
 <style>
 .ctx-backdrop {
   position: fixed;
