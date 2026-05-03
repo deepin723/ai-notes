@@ -22,17 +22,23 @@ const onSave = () => {
         <div class="logo">
           <svg viewBox="0 0 40 40" fill="none">
             <rect width="40" height="40" rx="10" fill="#1A1F2E"/>
-            <circle cx="20" cy="14" r="4" fill="#6366F1" opacity="0.9"/>
-            <circle cx="10" cy="28" r="3" fill="#818CF8" opacity="0.7"/>
-            <circle cx="30" cy="28" r="3" fill="#818CF8" opacity="0.7"/>
-            <line x1="20" y1="14" x2="10" y2="28" stroke="#6366F1" stroke-width="1.2" opacity="0.5"/>
-            <line x1="20" y1="14" x2="30" y2="28" stroke="#6366F1" stroke-width="1.2" opacity="0.5"/>
-            <line x1="10" y1="28" x2="30" y2="28" stroke="#818CF8" stroke-width="1" opacity="0.4"/>
+            <polygon points="20,7 28.5,12 28.5,22 20,27 11.5,22 11.5,12" fill="none" stroke="#6366F1" stroke-width="1.1" opacity="0.55"/>
+            <line x1="20" y1="17" x2="20" y2="7" stroke="#6366F1" stroke-width="1" opacity="0.45"/>
+            <line x1="20" y1="17" x2="28.5" y2="22" stroke="#6366F1" stroke-width="1" opacity="0.45"/>
+            <line x1="20" y1="17" x2="11.5" y2="22" stroke="#6366F1" stroke-width="1" opacity="0.45"/>
+            <circle cx="20" cy="7" r="2.5" fill="#6366F1"/>
+            <circle cx="28.5" cy="12" r="2" fill="#818CF8" opacity="0.8"/>
+            <circle cx="28.5" cy="22" r="2" fill="#818CF8" opacity="0.8"/>
+            <circle cx="20" cy="27" r="2.5" fill="#6366F1"/>
+            <circle cx="11.5" cy="22" r="2" fill="#818CF8" opacity="0.8"/>
+            <circle cx="11.5" cy="12" r="2" fill="#818CF8" opacity="0.8"/>
+            <circle cx="20" cy="17" r="3.5" fill="#6366F1"/>
+            <circle cx="20" cy="17" r="1.8" fill="#A5B4FC"/>
           </svg>
         </div>
         <div>
           <h1 class="brand-name">Vki</h1>
-          <p class="brand-sub">神经元智能知识库</p>
+          <p class="brand-sub">deepin · 知识图谱</p>
         </div>
       </div>
 

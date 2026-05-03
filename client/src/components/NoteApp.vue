@@ -401,12 +401,18 @@ onUnmounted(() => {
         <div class="brand">
           <svg viewBox="0 0 32 32" fill="none" width="28" height="28">
             <rect width="32" height="32" rx="8" fill="#1A1F2E"/>
-            <circle cx="16" cy="11" r="3" fill="#6366F1" opacity="0.9"/>
-            <circle cx="8.5" cy="22" r="2.2" fill="#818CF8" opacity="0.7"/>
-            <circle cx="23.5" cy="22" r="2.2" fill="#818CF8" opacity="0.7"/>
-            <line x1="16" y1="11" x2="8.5" y2="22" stroke="#6366F1" stroke-width="1" opacity="0.5"/>
-            <line x1="16" y1="11" x2="23.5" y2="22" stroke="#6366F1" stroke-width="1" opacity="0.5"/>
-            <line x1="8.5" y1="22" x2="23.5" y2="22" stroke="#818CF8" stroke-width="0.8" opacity="0.35"/>
+            <polygon points="16,5 23,9 23,17 16,21 9,17 9,9" fill="none" stroke="#6366F1" stroke-width="1" opacity="0.55"/>
+            <line x1="16" y1="13" x2="16" y2="5" stroke="#6366F1" stroke-width="0.9" opacity="0.45"/>
+            <line x1="16" y1="13" x2="23" y2="17" stroke="#6366F1" stroke-width="0.9" opacity="0.45"/>
+            <line x1="16" y1="13" x2="9" y2="17" stroke="#6366F1" stroke-width="0.9" opacity="0.45"/>
+            <circle cx="16" cy="5" r="2" fill="#6366F1"/>
+            <circle cx="23" cy="9" r="1.5" fill="#818CF8" opacity="0.8"/>
+            <circle cx="23" cy="17" r="1.5" fill="#818CF8" opacity="0.8"/>
+            <circle cx="16" cy="21" r="2" fill="#6366F1"/>
+            <circle cx="9" cy="17" r="1.5" fill="#818CF8" opacity="0.8"/>
+            <circle cx="9" cy="9" r="1.5" fill="#818CF8" opacity="0.8"/>
+            <circle cx="16" cy="13" r="2.8" fill="#6366F1"/>
+            <circle cx="16" cy="13" r="1.4" fill="#A5B4FC"/>
           </svg>
           <span class="brand-name">Vki</span>
         </div>
