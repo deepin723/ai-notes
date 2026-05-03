@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
 import { useUser, useClerk } from '@clerk/vue'
 import GraphView from './GraphView.vue'
@@ -104,6 +104,28 @@ let compileProgressTimer: ReturnType<typeof setInterval> | null = null
 
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
+
+// ── Graph Compile (from graph view) ──────────────────────────────────────
+const compilingIds = reactive(new Set<string>())
+
+const compileFromGraph = async (id: string) => {
+  if (compilingIds.has(id)) return
+  compilingIds.add(id)
+  try {
+    const res = await authFetch(`/api/compile/${id}`, { method: 'POST', headers: headers() })
+    const data = await res.json()
+    if (data.pages) {
+      await fetchNotes()
+      showToast(`✦ 已生成 ${data.pages.length} 个延伸神经元`)
+    } else {
+      showToast(data.error || '生成失败', 'error')
+    }
+  } catch {
+    showToast('网络错误', 'error')
+  } finally {
+    compilingIds.delete(id)
+  }
+}
 
 // ── Delete Confirmation ───────────────────────────────────────────────────
 const confirmDeleteId = ref<string | null>(null)
@@ -645,7 +667,7 @@ onUnmounted(() => {
       <!-- GRAPH VIEW -->
       <template v-else-if="view === 'graph'">
         <div class="graph-container">
-          <GraphView :notes="notes" @open-note="id => { openNote(id) }" />
+          <GraphView :notes="notes" :compiling-ids="compilingIds" @open-note="id => { openNote(id) }" @compile="compileFromGraph" />
         </div>
       </template>
 
