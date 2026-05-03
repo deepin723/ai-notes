@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
 
-const props = defineProps<{ apiKey: string; baseUrl: string }>()
+const props = defineProps<{ apiKey: string; baseUrl: string; getToken: () => Promise<string | null> }>()
 const emit = defineEmits<{ settings: [] }>()
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -132,6 +132,17 @@ const wordCount = computed(() => ({
 const renderedPreview = computed(() => renderMarkdown(editorContent.value))
 
 // ── API Helpers ────────────────────────────────────────────────────────────
+const authFetch = async (url: string, options: RequestInit = {}) => {
+  const token = await props.getToken()
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers as Record<string, string> || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+}
+
 const headers = () => ({
   'Content-Type': 'application/json',
   'x-api-key':  props.apiKey,
@@ -141,7 +152,7 @@ const headers = () => ({
 const fetchNotes = async () => {
   isLoading.value = true
   try {
-    const res = await fetch('/api/notes')
+    const res = await authFetch('/api/notes')
     notes.value = await res.json()
   } finally {
     isLoading.value = false
@@ -149,7 +160,7 @@ const fetchNotes = async () => {
 }
 
 const openNote = async (id: string) => {
-  const res = await fetch(`/api/notes/${id}`)
+  const res = await authFetch(`/api/notes/${id}`)
   currentNote.value = await res.json()
   compiledPages.value = []
   compileProgress.value = 0
@@ -163,13 +174,13 @@ const saveNote = async () => {
   const wasEditing = editingId.value
   try {
     if (editingId.value) {
-      await fetch(`/api/notes/${editingId.value}`, {
+      await authFetch(`/api/notes/${editingId.value}`, {
         method: 'PUT',
         headers: headers(),
         body: JSON.stringify({ title: editorTitle.value, content: editorContent.value, tags }),
       })
     } else {
-      await fetch('/api/notes', {
+      await authFetch('/api/notes', {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({ title: editorTitle.value, content: editorContent.value, tags }),
@@ -186,7 +197,7 @@ const saveNote = async () => {
 
 const deleteNote = async (id: string) => {
   try {
-    await fetch(`/api/notes/${id}`, { method: 'DELETE' })
+    await authFetch(`/api/notes/${id}`, { method: 'DELETE' })
     await fetchNotes()
     view.value = 'list'
     currentNote.value = null
@@ -215,7 +226,7 @@ const compileNote = async () => {
   }, 2500)
 
   try {
-    const res = await fetch(`/api/compile/${currentNote.value.id}`, {
+    const res = await authFetch(`/api/compile/${currentNote.value.id}`, {
       method: 'POST',
       headers: headers(),
     })
@@ -228,7 +239,7 @@ const compileNote = async () => {
       compileProgress.value = 100
       compiledPages.value = data.pages
       await fetchNotes()
-      const updated = await fetch(`/api/notes/${currentNote.value.id}`)
+      const updated = await authFetch(`/api/notes/${currentNote.value.id}`)
       currentNote.value = await updated.json()
       showToast(`已生成 ${data.pages.length} 个 Wiki 页面`)
     } else {
@@ -284,7 +295,7 @@ const openEditor = (note?: NoteMeta) => {
     editingId.value = note.id
     editorTitle.value = note.title
     editorTags.value = note.tags?.join(', ') || ''
-    fetch(`/api/notes/${note.id}`).then(r => r.json()).then(d => {
+    authFetch(`/api/notes/${note.id}`).then(r => r.json()).then(d => {
       editorContent.value = d.content || ''
     })
   } else {
