@@ -7,6 +7,7 @@ interface NoteMeta {
   id: string
   type: NoteType
   title: string
+  tags?: string[]
   links: string[]
   sourceId?: string
   compiledAt?: string
@@ -15,11 +16,13 @@ interface NoteMeta {
 const props = defineProps<{
   notes: NoteMeta[]
   compilingIds: Set<string>
+  searchQuery?: string
 }>()
 
 const emit = defineEmits<{
   openNote: [id: string]
   compile: [id: string]
+  createNote: []
 }>()
 
 const TYPE_COLORS: Record<NoteType, string> = {
@@ -50,6 +53,7 @@ let rafId: number | null = null
 let ro: ResizeObserver | null = null
 let gNodes: GNode[] = []
 let gEdges: [number, number][] = []
+let gTagEdges: [number, number][] = []
 let gDegree: number[] = []
 let hovered: GNode | null = null
 let dragNode: GNode | null = null
@@ -66,8 +70,8 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 function buildGraph(W: number, H: number) {
   gNodes = props.notes.map(n => ({
     id: n.id, title: n.title, type: n.type,
-    x: W / 2 + (Math.random() - 0.5) * Math.min(W, H) * 0.55,
-    y: H / 2 + (Math.random() - 0.5) * Math.min(W, H) * 0.55,
+    x: W / 2 + (Math.random() - 0.5) * Math.min(W, H) * 0.6,
+    y: H / 2 + (Math.random() - 0.5) * Math.min(W, H) * 0.6,
     vx: 0, vy: 0,
   }))
   const titleToIdx = new Map(props.notes.map((n, i) => [n.title, i]))
@@ -93,7 +97,27 @@ function buildGraph(W: number, H: number) {
     }
   }
 
-  // Compute per-node degree for size scaling
+  // Tag-based soft links — only for tags shared by 2–4 notes (avoids noise from broad tags)
+  const tagToNodes = new Map<string, number[]>()
+  for (let i = 0; i < props.notes.length; i++) {
+    for (const tag of (props.notes[i].tags || [])) {
+      if (!tagToNodes.has(tag)) tagToNodes.set(tag, [])
+      tagToNodes.get(tag)!.push(i)
+    }
+  }
+  const tagSeen = new Set<string>()
+  gTagEdges = []
+  for (const indices of tagToNodes.values()) {
+    if (indices.length < 2 || indices.length > 4) continue
+    for (let a = 0; a < indices.length; a++) {
+      for (let b = a + 1; b < indices.length; b++) {
+        const i = indices[a], j = indices[b]
+        const k = `${Math.min(i,j)},${Math.max(i,j)}`
+        if (!seen.has(k) && !tagSeen.has(k)) { tagSeen.add(k); gTagEdges.push([i, j]) }
+      }
+    }
+  }
+
   gDegree = new Array(gNodes.length).fill(0)
   for (const [i, j] of gEdges) { gDegree[i]++; gDegree[j]++ }
 
@@ -104,7 +128,8 @@ function buildGraph(W: number, H: number) {
 function simulate(W: number, H: number) {
   const n = gNodes.length
   if (!n) return
-  const REP = 2800, SL = 150, SK = 0.02, DAMP = 0.82, CK = 0.006
+  // Increased REP + SL so nodes spread further apart → less label crowding
+  const REP = 5000, SL = 175, SK = 0.022, DAMP = 0.82, CK = 0.006
   const fx = new Float32Array(n), fy = new Float32Array(n)
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
@@ -151,7 +176,9 @@ function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
 }
 
 function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
-  ctx.clearRect(0, 0, W, H)
+  // Solid background fill — fixes PNG export showing transparent as white
+  ctx.fillStyle = '#0A0D14'
+  ctx.fillRect(0, 0, W, H)
   drawGrid(ctx, W, H)
 
   ctx.save()
@@ -167,39 +194,63 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
     }
   }
 
-  // Edges — skip if either endpoint is a hidden type
+  const sq = props.searchQuery?.trim().toLowerCase() ?? ''
+  const hasSearch = sq.length > 0
+
+  // Tag edges — dashed, very subtle
+  ctx.setLineDash([3, 7])
+  for (const [i, j] of gTagEdges) {
+    if (hiddenTypes.has(gNodes[i].type) || hiddenTypes.has(gNodes[j].type)) continue
+    if (hasSearch) {
+      const iM = gNodes[i].title.toLowerCase().includes(sq)
+      const jM = gNodes[j].title.toLowerCase().includes(sq)
+      if (!iM && !jM) continue
+    }
+    ctx.strokeStyle = 'rgba(129,140,248,0.13)'
+    ctx.lineWidth = 0.8 / tr.s
+    ctx.beginPath()
+    ctx.moveTo(gNodes[i].x, gNodes[i].y)
+    ctx.lineTo(gNodes[j].x, gNodes[j].y)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+
+  // Real edges
   for (const [i, j] of gEdges) {
     if (hiddenTypes.has(gNodes[i].type) || hiddenTypes.has(gNodes[j].type)) continue
+    const iM = hasSearch && gNodes[i].title.toLowerCase().includes(sq)
+    const jM = hasSearch && gNodes[j].title.toLowerCase().includes(sq)
+    if (hasSearch && !iM && !jM) continue
     const lit = hi >= 0 && (i === hi || j === hi)
-    ctx.strokeStyle = lit ? 'rgba(129,140,248,0.85)' : 'rgba(129,140,248,0.22)'
-    ctx.lineWidth = (lit ? 1.8 : 1) / tr.s
+    ctx.strokeStyle = (iM || jM)
+      ? 'rgba(129,140,248,0.65)'
+      : lit ? 'rgba(129,140,248,0.85)' : 'rgba(129,140,248,0.22)'
+    ctx.lineWidth = (lit || iM || jM ? 1.8 : 1) / tr.s
     ctx.beginPath()
     ctx.moveTo(gNodes[i].x, gNodes[i].y)
     ctx.lineTo(gNodes[j].x, gNodes[j].y)
     ctx.stroke()
   }
 
-  // Nodes
-  const showLabels = gNodes.length <= 60 || tr.s > 1.3
   const now = Date.now()
 
+  // Pass 1: Draw all node circles
   for (let i = 0; i < gNodes.length; i++) {
     const nd = gNodes[i]
     if (hiddenTypes.has(nd.type)) continue
 
     const isH = nd === hovered
     const isC = connected.has(i)
-    const dimmed = hi >= 0 && !isH && !isC
-    const isCompiling = props.compilingIds.has(nd.id)
+    const matchesSearch = hasSearch && nd.title.toLowerCase().includes(sq)
+    const dimmed = (hi >= 0 && !isH && !isC) || (hasSearch && !matchesSearch)
+
     const color = TYPE_COLORS[nd.type]
-
-    // Size scales with degree (hub nodes appear larger)
     const baseR = 4 + Math.min((gDegree[i] || 0) * 1.5, 7)
-    const r = isH ? baseR + 4 : isC ? baseR + 2 : baseR
+    const r = isH ? baseR + 4 : (isC || matchesSearch) ? baseR + 2 : baseR
 
-    ctx.globalAlpha = dimmed ? 0.18 : 1
+    ctx.globalAlpha = dimmed ? 0.1 : 1
 
-    if (isCompiling) {
+    if (props.compilingIds.has(nd.id)) {
       const pulse = (Math.sin(now / 280) + 1) / 2
       const pr = r + 5 + pulse * 9
       ctx.beginPath()
@@ -211,13 +262,14 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
       ctx.stroke()
     }
 
-    if (isH) {
-      const g = ctx.createRadialGradient(nd.x, nd.y, 0, nd.x, nd.y, r + 14)
-      g.addColorStop(0, color + '99')
+    if (isH || matchesSearch) {
+      const glowR = matchesSearch ? r + 20 : r + 14
+      const g = ctx.createRadialGradient(nd.x, nd.y, 0, nd.x, nd.y, glowR)
+      g.addColorStop(0, color + (matchesSearch ? 'BB' : '99'))
       g.addColorStop(1, color + '00')
       ctx.fillStyle = g
       ctx.beginPath()
-      ctx.arc(nd.x, nd.y, r + 14, 0, Math.PI * 2)
+      ctx.arc(nd.x, nd.y, glowR, 0, Math.PI * 2)
       ctx.fill()
     }
 
@@ -234,14 +286,59 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
       ctx.stroke()
     }
 
-    if (showLabels || isH || isC) {
-      ctx.font = `${isH ? 500 : 400} 11px system-ui, -apple-system, sans-serif`
-      ctx.fillStyle = isH ? '#F1F5F9' : isC ? '#CBD5E1' : '#64748B'
-      const label = nd.title.length > 20 ? nd.title.slice(0, 19) + '…' : nd.title
-      ctx.fillText(label, nd.x + r + 6, nd.y + 4)
-    }
-
     ctx.globalAlpha = 1
+  }
+
+  // Pass 2: Draw labels sorted by priority, with collision detection
+  // High-priority labels claim space first; lower-priority skip if overlapping
+  const showNormalLabels = gNodes.length <= 55 || tr.s > 1.4
+
+  type LabelJob = { nd: GNode; i: number; isH: boolean; isC: boolean; matchesSearch: boolean; priority: number }
+  const jobs: LabelJob[] = []
+  for (let i = 0; i < gNodes.length; i++) {
+    const nd = gNodes[i]
+    if (hiddenTypes.has(nd.type)) continue
+    const isH = nd === hovered
+    const isC = connected.has(i)
+    const matchesSearch = hasSearch && nd.title.toLowerCase().includes(sq)
+    const dimmed = (hi >= 0 && !isH && !isC) || (hasSearch && !matchesSearch)
+    if (dimmed) continue
+    if (!isH && !isC && !matchesSearch && !showNormalLabels) continue
+    const priority = isH ? 100 : matchesSearch ? 80 : isC ? 60 : 40
+    jobs.push({ nd, i, isH, isC, matchesSearch, priority })
+  }
+  jobs.sort((a, b) => b.priority - a.priority)
+
+  // Rects in world space [x, y, w, h]
+  const taken: [number, number, number, number][] = []
+
+  for (const { nd, i, isH, isC, matchesSearch } of jobs) {
+    const baseR = 4 + Math.min((gDegree[i] || 0) * 1.5, 7)
+    const r = isH ? baseR + 4 : (isC || matchesSearch) ? baseR + 2 : baseR
+
+    ctx.font = `${isH || matchesSearch ? 600 : 400} 11px system-ui, -apple-system, sans-serif`
+    const label = nd.title.length > 18 ? nd.title.slice(0, 17) + '…' : nd.title
+    const tw = ctx.measureText(label).width
+
+    const lx = nd.x + r + 7
+    const ly = nd.y + 4
+    const rx = lx - 3, ry = ly - 11, rw = tw + 6, rh = 14
+
+    // Skip if overlaps with an already-drawn label
+    const pad = 2
+    const overlaps = taken.some(([ox, oy, ow, oh]) =>
+      rx - pad < ox + ow && rx + rw + pad > ox && ry - pad < oy + oh && ry + rh + pad > oy
+    )
+    if (overlaps && !isH) continue
+
+    taken.push([rx, ry, rw, rh])
+
+    // Semi-transparent background for readability
+    ctx.fillStyle = 'rgba(8, 10, 18, 0.76)'
+    ctx.fillRect(rx, ry, rw, rh)
+
+    ctx.fillStyle = isH ? '#F1F5F9' : matchesSearch ? '#A5B4FC' : isC ? '#CBD5E1' : '#94A3B8'
+    ctx.fillText(label, lx, ly)
   }
 
   ctx.restore()
@@ -329,6 +426,12 @@ function onMouseUp() {
   if (dragNode && !dragMoved) emit('openNote', dragNode.id)
   dragNode = null
   if (isPanning) { isPanning = false; canvasRef.value!.style.cursor = 'default' }
+}
+
+function onDblClick(e: MouseEvent) {
+  const [sx, sy] = getPos(e)
+  const [wx, wy] = screenToWorld(sx, sy)
+  if (!hitTest(wx, wy)) emit('createNote')
 }
 
 function onWheel(e: WheelEvent) {
@@ -443,6 +546,7 @@ onUnmounted(() => {
       @mouseup="onMouseUp"
       @mouseleave="onMouseLeave"
       @contextmenu="onContextMenu"
+      @dblclick="onDblClick"
     />
 
     <!-- Context Menu -->
@@ -473,7 +577,15 @@ onUnmounted(() => {
 
     <div class="graph-hint">
       {{ nodeCount }} 个笔记 &nbsp;·&nbsp; {{ edgeCount }} 条链接
-      &nbsp;·&nbsp; 右键节点操作 &nbsp;·&nbsp; 滚轮缩放 &nbsp;·&nbsp; 拖拽移动
+      &nbsp;·&nbsp; 右键操作 &nbsp;·&nbsp; 双击新建 &nbsp;·&nbsp; 滚轮缩放
+    </div>
+
+    <!-- Search active indicator -->
+    <div v-if="searchQuery?.trim()" class="graph-search-badge">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="11" height="11">
+        <circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/>
+      </svg>
+      {{ searchQuery }}
     </div>
 
     <!-- Toolbar: fit + export -->
@@ -541,6 +653,25 @@ onUnmounted(() => {
   padding: 4px 14px;
   border-radius: 99px;
   border: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(8px);
+}
+
+.graph-search-badge {
+  position: absolute;
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #A5B4FC;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 3px 12px;
+  border-radius: 99px;
+  pointer-events: none;
+  white-space: nowrap;
   backdrop-filter: blur(8px);
 }
 

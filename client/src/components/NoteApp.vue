@@ -667,7 +667,14 @@ onUnmounted(() => {
       <!-- GRAPH VIEW -->
       <template v-else-if="view === 'graph'">
         <div class="graph-container">
-          <GraphView :notes="notes" :compiling-ids="compilingIds" @open-note="id => { openNote(id) }" @compile="compileFromGraph" />
+          <GraphView
+            :notes="notes"
+            :compiling-ids="compilingIds"
+            :search-query="searchQuery"
+            @open-note="id => openNote(id)"
+            @compile="compileFromGraph"
+            @create-note="openEditor()"
+          />
         </div>
       </template>
 
