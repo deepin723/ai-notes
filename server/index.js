@@ -157,7 +157,7 @@ app.post('/api/compile/:id', requireUser, async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4.1',
+        model: 'Kimi-K2.5',
         messages: [
           {
             role: 'system',
@@ -185,6 +185,7 @@ Rules:
     })
 
     const data = await response.json()
+    if (data.error) return res.status(500).json({ error: `API 错误：${data.error.message || JSON.stringify(data.error)}` })
     const raw = data.choices?.[0]?.message?.content?.trim()
     if (!raw) return res.status(500).json({ error: 'LLM 返回为空，请重试' })
 
