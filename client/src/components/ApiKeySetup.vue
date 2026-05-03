@@ -55,7 +55,7 @@ const onSave = () => {
 
       <button class="btn" @click="onSave">开始使用</button>
 
-      <p class="foot">支持 OpenAI 兼容接口 · 编译模型 Kimi-K2.5</p>
+      <p class="foot">支持 OpenAI 兼容接口 · 编译模型 gpt5.4</p>
     </div>
   </div>
 </template>
