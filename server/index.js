@@ -252,6 +252,82 @@ Rules:
   }
 })
 
+// Chat with a note — streaming SSE
+app.post('/api/chat/:noteId', requireUser, async (req, res) => {
+  const apiKey = req.headers['x-api-key']
+  const baseUrl = (req.headers['x-base-url'] || 'https://bobdong.cn/v1').replace(/\/$/, '')
+
+  if (!apiKey) return res.status(401).json({ error: '请先配置你的 API Key' })
+
+  const note = readNote(req.userId, req.params.noteId)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+
+  const { messages } = req.body
+  if (!Array.isArray(messages) || !messages.length) {
+    return res.status(400).json({ error: '缺少消息' })
+  }
+
+  const systemPrompt = `You are a knowledge assistant for a personal wiki. The user wants to discuss or ask questions about a specific note. Be concise and insightful. Reply in the same language as the user's question.
+
+Note title: ${note.title}
+Note type: ${note.type}
+Note content:
+${note.content}`
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  try {
+    const upstream = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.4',
+        stream: true,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages,
+        ],
+        max_tokens: 1500,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    })
+
+    if (!upstream.ok) {
+      const err = await upstream.json()
+      res.write(`data: ${JSON.stringify({ error: err.error?.message || '上游错误' })}\n\n`)
+      return res.end()
+    }
+
+    const reader = upstream.body.getReader()
+    const decoder = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') { res.write('data: [DONE]\n\n'); break }
+        try {
+          const delta = JSON.parse(payload).choices?.[0]?.delta?.content
+          if (delta) res.write(`data: ${JSON.stringify({ content: delta })}\n\n`)
+        } catch {}
+      }
+    }
+    res.end()
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ error: err instanceof Error ? err.message : '未知错误' })}\n\n`)
+    res.end()
+  }
+})
+
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
 // One-time migration: move root data/*.md into data/{userId}/

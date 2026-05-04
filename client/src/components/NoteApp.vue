@@ -105,6 +105,14 @@ let compileProgressTimer: ReturnType<typeof setInterval> | null = null
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
 
+// ── Chat State ────────────────────────────────────────────────────────────
+const chatOpen      = ref(false)
+const chatMessages  = ref<{ role: 'user' | 'assistant'; content: string }[]>([])
+const chatInput     = ref('')
+const isChatting    = ref(false)
+const chatStreaming  = ref('')
+const chatScrollRef = ref<HTMLDivElement | null>(null)
+
 // ── Graph Compile (from graph view) ──────────────────────────────────────
 const compilingIds = reactive(new Set<string>())
 
@@ -216,6 +224,9 @@ const openNote = async (id: string) => {
   currentNote.value = await res.json()
   compiledPages.value = []
   compileProgress.value = 0
+  chatOpen.value = false
+  chatMessages.value = []
+  chatStreaming.value = ''
   view.value = 'viewer'
 }
 
@@ -322,7 +333,57 @@ const copyNoteContent = async () => {
   }
 }
 
-// ── Markdown Toolbar ──────────────────────────────────────────────────────
+// ── Chat ──────────────────────────────────────────────────────────────────────
+const sendChat = async () => {
+  if (!chatInput.value.trim() || isChatting.value || !currentNote.value) return
+  const userMsg = chatInput.value.trim()
+  chatInput.value = ''
+  chatMessages.value.push({ role: 'user', content: userMsg })
+  isChatting.value = true
+  chatStreaming.value = ''
+  try {
+    const token = await props.getToken()
+    const resp = await fetch(`/api/chat/${currentNote.value.id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ messages: chatMessages.value }),
+    })
+    const reader = resp.body!.getReader()
+    const decoder = new TextDecoder()
+    let full = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = line.slice(6).trim()
+        if (payload === '[DONE]') break
+        try {
+          const d = JSON.parse(payload)
+          if (d.content) { full += d.content; chatStreaming.value = full }
+          if (d.error) showToast(d.error, 'error')
+        } catch {}
+      }
+    }
+    if (full) chatMessages.value.push({ role: 'assistant', content: full })
+    chatStreaming.value = ''
+  } catch {
+    showToast('对话失败，请重试', 'error')
+  } finally {
+    isChatting.value = false
+  }
+}
+
+watch([() => chatMessages.value.length, chatStreaming], async () => {
+  await nextTick()
+  chatScrollRef.value?.scrollTo({ top: chatScrollRef.value.scrollHeight })
+})
+
+
 const insertMarkdown = (prefix: string, suffix = '', blockMode = false) => {
   const el = contentRef.value
   if (!el) return
@@ -523,7 +584,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- ── Main ── -->
-    <main class="main">
+    <main class="main" :class="{ 'viewer-chat-mode': view === 'viewer' && chatOpen }">
 
       <!-- LIST VIEW -->
       <template v-if="view === 'list'">
@@ -707,6 +768,12 @@ onUnmounted(() => {
               {{ copiedNote ? '已复制' : '复制' }}
             </button>
             <button v-if="currentNote.type === 'raw'" class="btn-ghost-sm" @click="openEditor(currentNote)">编辑</button>
+            <button class="btn-ghost-sm" :class="{ 'chat-active': chatOpen }" @click="chatOpen = !chatOpen">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                <path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l3 3 3-3h3a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/>
+              </svg>
+              {{ chatOpen ? '收起' : '对话' }}
+            </button>
             <template v-if="confirmDeleteId === currentNote.id">
               <span class="delete-confirm-text">确定删除？</span>
               <button class="btn-confirm-del" @click="deleteNote(currentNote.id); confirmDeleteId = null">删除</button>
@@ -810,6 +877,56 @@ onUnmounted(() => {
                 {{ title }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- Chat Panel -->
+        <div v-if="chatOpen" class="chat-panel">
+          <div class="chat-panel-header">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="12" height="12" style="opacity:0.5">
+              <path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l3 3 3-3h3a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/>
+            </svg>
+            与「{{ currentNote.title.length > 24 ? currentNote.title.slice(0, 23) + '…' : currentNote.title }}」对话
+            <button class="chat-clear-btn" @click="chatMessages = []; chatStreaming = ''">清空</button>
+          </div>
+          <div class="chat-messages" ref="chatScrollRef">
+            <div v-if="!chatMessages.length && !isChatting" class="chat-empty">
+              <p>对这篇笔记有什么想问的？</p>
+              <div class="chat-suggestions">
+                <button class="chat-suggest" @click="chatInput = '帮我总结这篇笔记的核心内容'; sendChat()">总结核心内容</button>
+                <button class="chat-suggest" @click="chatInput = '这篇笔记中有哪些关键概念？'; sendChat()">关键概念</button>
+                <button class="chat-suggest" @click="chatInput = '基于这篇笔记，有哪些延伸思考？'; sendChat()">延伸思考</button>
+              </div>
+            </div>
+            <div v-for="(msg, idx) in chatMessages" :key="idx" class="chat-msg" :class="msg.role">
+              <div class="chat-bubble" :class="msg.role">
+                <div v-if="msg.role === 'assistant'" class="md-body chat-md" v-html="renderMarkdown(msg.content)" />
+                <span v-else>{{ msg.content }}</span>
+              </div>
+            </div>
+            <div v-if="isChatting && chatStreaming" class="chat-msg assistant">
+              <div class="chat-bubble assistant">
+                <div class="md-body chat-md" v-html="renderMarkdown(chatStreaming)" />
+                <span class="chat-cursor">▍</span>
+              </div>
+            </div>
+            <div v-else-if="isChatting" class="chat-typing">
+              <span /><span /><span />
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <input
+              v-model="chatInput"
+              class="chat-input"
+              placeholder="输入问题，Enter 发送…"
+              :disabled="isChatting"
+              @keydown.enter.prevent="sendChat"
+            />
+            <button class="chat-send" :disabled="isChatting || !chatInput.trim()" @click="sendChat">
+              <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
+                <path d="M14.5 1.5l-13 5.5 4 2 2 4.5 7-12z"/>
+              </svg>
+            </button>
           </div>
         </div>
       </template>
@@ -1810,4 +1927,195 @@ onUnmounted(() => {
 .toast-leave-active { transition: all 0.22s ease; }
 .toast-enter-from   { opacity: 0; transform: translateX(24px) scale(0.93); }
 .toast-leave-to     { opacity: 0; transform: translateX(12px); }
+
+/* ── Viewer + Chat split layout ── */
+.viewer-chat-mode {
+  overflow: hidden;
+}
+.viewer-chat-mode .viewer-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ── Chat Panel ── */
+.chat-panel {
+  height: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.chat-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.chat-clear-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s;
+  font-family: inherit;
+  padding: 0;
+}
+.chat-clear-btn:hover { color: var(--text-2); }
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 0;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.chat-suggest {
+  padding: 5px 12px;
+  background: rgba(99,102,241,0.07);
+  border: 1px solid rgba(99,102,241,0.2);
+  border-radius: 99px;
+  font-size: 11px;
+  color: var(--accent-lt);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.chat-suggest:hover { background: rgba(99,102,241,0.14); }
+
+.chat-msg { display: flex; }
+.chat-msg.user      { justify-content: flex-end; }
+.chat-msg.assistant { justify-content: flex-start; }
+
+.chat-bubble {
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.chat-bubble.user {
+  background: rgba(99,102,241,0.15);
+  color: var(--text);
+  border-bottom-right-radius: 4px;
+}
+.chat-bubble.assistant {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-md { font-size: 13px; line-height: 1.65; }
+.chat-md :deep(h1) { font-size: 15px; margin: 10px 0 6px; }
+.chat-md :deep(h2) { font-size: 14px; margin: 8px 0 5px; }
+.chat-md :deep(h3) { font-size: 13px; margin: 6px 0 4px; }
+.chat-md :deep(p)  { margin-bottom: 6px; }
+.chat-md :deep(ul), .chat-md :deep(ol) { padding-left: 16px; margin-bottom: 6px; }
+
+.chat-cursor {
+  display: inline-block;
+  animation: blink 0.9s step-end infinite;
+  color: var(--accent-lt);
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+@keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0 } }
+
+.chat-typing {
+  display: flex;
+  gap: 5px;
+  padding: 6px 4px;
+}
+.chat-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-lt);
+  animation: bounce 1.2s ease-in-out infinite;
+  opacity: 0.5;
+}
+.chat-typing span:nth-child(2) { animation-delay: 0.15s; }
+.chat-typing span:nth-child(3) { animation-delay: 0.30s; }
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4 }
+  40%           { transform: translateY(-5px); opacity: 1 }
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chat-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.chat-input:focus { border-color: var(--accent); }
+.chat-input::placeholder { color: var(--text-3); }
+.chat-input:disabled { opacity: 0.6; }
+
+.chat-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+.chat-send:hover { opacity: 0.85; }
+.chat-send:disabled { opacity: 0.3; cursor: default; }
+
+.btn-ghost-sm.chat-active {
+  border-color: rgba(99,102,241,0.35);
+  color: var(--accent-lt);
+  background: rgba(99,102,241,0.08);
+}
 </style>
+
