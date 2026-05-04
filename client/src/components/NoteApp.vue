@@ -102,6 +102,10 @@ const activeTag      = ref<string | null>(null)
 const compileProgress = ref(0)
 let compileProgressTimer: ReturnType<typeof setInterval> | null = null
 
+// ── Mobile Sidebar ────────────────────────────────────────────────────────
+const showMobileSidebar = ref(false)
+watch([view, selectedType, activeTag], () => { showMobileSidebar.value = false })
+
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
 
@@ -478,8 +482,11 @@ onUnmounted(() => {
 <template>
   <div class="app" :class="{ 'editor-mode': view === 'editor' }">
 
+    <!-- Sidebar Backdrop (mobile) -->
+    <div v-if="showMobileSidebar" class="sidebar-backdrop" @click="showMobileSidebar = false" />
+
     <!-- ── Sidebar ── -->
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'mobile-open': showMobileSidebar }">
       <div class="sidebar-top">
         <div class="brand">
           <svg viewBox="0 0 32 32" fill="none" width="28" height="28">
@@ -498,6 +505,11 @@ onUnmounted(() => {
             <circle cx="16" cy="13" r="1.4" fill="#A5B4FC"/>
           </svg>
           <span class="brand-name">Vki</span>
+          <button class="mobile-sidebar-close" @click="showMobileSidebar = false">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+            </svg>
+          </button>
         </div>
         <button class="btn-new" @click="openEditor()">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
@@ -585,6 +597,21 @@ onUnmounted(() => {
 
     <!-- ── Main ── -->
     <main class="main" :class="{ 'viewer-chat-mode': view === 'viewer' && chatOpen }">
+
+      <!-- Mobile Header -->
+      <div class="mobile-header">
+        <button class="mobile-hamburger" @click="showMobileSidebar = true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+          </svg>
+        </button>
+        <span class="mobile-brand-name">Vki</span>
+        <button class="mobile-new-btn" @click="openEditor()">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" width="14" height="14">
+            <line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/>
+          </svg>
+        </button>
+      </div>
 
       <!-- LIST VIEW -->
       <template v-if="view === 'list'">
@@ -2116,6 +2143,166 @@ onUnmounted(() => {
   border-color: rgba(99,102,241,0.35);
   color: var(--accent-lt);
   background: rgba(99,102,241,0.08);
+}
+
+/* ── Mobile Header (hidden on desktop) ── */
+.mobile-header {
+  display: none;
+}
+
+.mobile-sidebar-close {
+  display: none;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 150;
+  backdrop-filter: blur(2px);
+}
+
+/* ── Responsive: Mobile ── */
+@media (max-width: 768px) {
+
+  /* Sidebar: slide-in overlay */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 200;
+    width: 82%;
+    max-width: 280px;
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .mobile-sidebar-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: auto;
+    padding: 5px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-3);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .mobile-sidebar-close:hover { color: var(--text-2); background: rgba(255,255,255,0.06); }
+
+  /* Mobile top header */
+  .mobile-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+
+  .mobile-hamburger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .mobile-hamburger:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+  .mobile-brand-name {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.3px;
+  }
+
+  .mobile-new-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 8px;
+    color: var(--accent-lt);
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .mobile-new-btn:hover { background: rgba(99, 102, 241, 0.2); }
+
+  /* Main content fills full width (sidebar is out of flow) */
+  .main {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* Tighten padding across views */
+  .list-header { padding: 14px 16px 12px; }
+  .cards {
+    grid-template-columns: 1fr;
+    padding: 12px 16px 28px;
+    gap: 10px;
+  }
+
+  .viewer-header { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+  .viewer-meta { flex-wrap: wrap; }
+  .viewer-actions { flex-wrap: wrap; gap: 6px; }
+  .viewer-body { padding: 16px 16px 40px; max-width: 100%; }
+  .viewer-title { font-size: 20px; }
+
+  .editor-header { padding: 12px 16px; }
+  .editor-body { padding: 14px 16px 24px; }
+  .editor-shortcut-hint { display: none; }
+
+  /* Chat panel: tighter on mobile */
+  .chat-panel { height: 260px; }
+  .chat-messages { padding: 10px 14px; }
+  .chat-input-row { padding: 8px 12px; }
+
+  /* Editor mode: single column, no preview pane */
+  .app.editor-mode .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+    overflow: hidden;
+  }
+  .app.editor-mode .mobile-header {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .app.editor-mode .editor-header {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .app.editor-mode .editor-body {
+    grid-column: 1;
+    grid-row: 3;
+    overflow-y: auto;
+  }
+  .app.editor-mode .editor-preview-pane {
+    display: none !important;
+  }
 }
 </style>
 
