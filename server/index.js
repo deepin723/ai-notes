@@ -66,6 +66,19 @@ const userDir = (userId) => {
 
 const notePath = (userId, id) => path.join(userDir(userId), `${id}.md`)
 
+const spacesFilePath = (userId) => path.join(userDir(userId), '__spaces__.json')
+
+const readUserSpaces = (userId) => {
+  const fp = spacesFilePath(userId)
+  if (!fs.existsSync(fp)) return ['默认']
+  try { return JSON.parse(fs.readFileSync(fp, 'utf8')) }
+  catch { return ['默认'] }
+}
+
+const writeUserSpaces = (userId, spaces) => {
+  fs.writeFileSync(spacesFilePath(userId), JSON.stringify(spaces), 'utf8')
+}
+
 const readNote = (userId, id) => {
   const fp = notePath(userId, id)
   if (!fs.existsSync(fp)) return null
@@ -341,12 +354,15 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/api/spaces', requireUser, (req, res) => {
   try {
     const notes = listNotes(req.userId)
+    const saved = readUserSpaces(req.userId)
     const counts = {}
+    // Seed with saved spaces so empty ones are preserved
+    for (const sp of saved) counts[sp] = 0
+    // Count notes per space
     for (const note of notes) {
       const sp = note.space || '默认'
       counts[sp] = (counts[sp] || 0) + 1
     }
-    if (!Object.keys(counts).length) counts['默认'] = 0
     const result = Object.entries(counts)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => {
@@ -361,6 +377,19 @@ app.get('/api/spaces', requireUser, (req, res) => {
 })
 
 // Build PPTX from note via LLM
+// Create / register a new space
+app.post('/api/spaces', requireUser, (req, res) => {
+  const { name } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: '请输入空间名称' })
+  const cleanName = name.trim()
+  const spaces = readUserSpaces(req.userId)
+  if (!spaces.includes(cleanName)) {
+    spaces.push(cleanName)
+    writeUserSpaces(req.userId, spaces)
+  }
+  res.json({ ok: true, name: cleanName })
+})
+
 function buildPPT(outline) {
   const prs = new pptxgen()
   prs.layout = 'LAYOUT_WIDE'
@@ -414,6 +443,18 @@ app.post('/api/ppt/:noteId', requireUser, async (req, res) => {
   const note = readNote(req.userId, req.params.noteId)
   if (!note) return res.status(404).json({ error: '笔记不存在' })
 
+  // Aggregate compiled wiki pages for richer PPT content
+  const allNotes = listNotes(req.userId)
+  const compiledPages = allNotes.filter(n => n.sourceId === note.id)
+  let fullContent = `# ${note.title}\n\n${note.content}`
+  for (const page of compiledPages) {
+    const detail = readNote(req.userId, page.id)
+    if (detail?.content) {
+      const label = TYPE_LABELS[page.type] || page.type
+      fullContent += `\n\n---\n## [${label}] ${page.title}\n\n${detail.content}`
+    }
+  }
+
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -434,7 +475,7 @@ Return ONLY valid JSON (no markdown fences):
 }
 Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as input, presentation-appropriate tone.`,
           },
-          { role: 'user', content: `Title: ${note.title}\n\n${note.content}` },
+          { role: 'user', content: fullContent },
         ],
         max_tokens: 2000,
       }),

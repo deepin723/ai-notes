@@ -60,6 +60,7 @@ let dragNode: GNode | null = null
 let dragMoved = false
 let isPanning = false
 let panStart = { x: 0, y: 0 }
+let lastTouchDist = 0
 
 const tr = { x: 0, y: 0, s: 1 }
 
@@ -448,6 +449,63 @@ function onMouseLeave() {
   hovered = null; dragNode = null; isPanning = false
 }
 
+function getTouchPos(t: Touch): [number, number] {
+  const r = canvasRef.value!.getBoundingClientRect()
+  return [t.clientX - r.left, t.clientY - r.top]
+}
+
+function onTouchStart(e: TouchEvent) {
+  e.preventDefault()
+  closeCtxMenu()
+  if (e.touches.length === 1) {
+    const [sx, sy] = getTouchPos(e.touches[0])
+    const [wx, wy] = screenToWorld(sx, sy)
+    const hit = hitTest(wx, wy)
+    if (hit) { dragNode = hit; dragMoved = false }
+    else { isPanning = true; panStart = { x: e.touches[0].clientX - tr.x, y: e.touches[0].clientY - tr.y } }
+  } else if (e.touches.length === 2) {
+    dragNode = null; isPanning = false
+    lastTouchDist = Math.hypot(
+      e.touches[1].clientX - e.touches[0].clientX,
+      e.touches[1].clientY - e.touches[0].clientY,
+    )
+  }
+}
+
+function onTouchMove(e: TouchEvent) {
+  e.preventDefault()
+  if (e.touches.length === 1) {
+    const [sx, sy] = getTouchPos(e.touches[0])
+    if (dragNode) {
+      const [wx, wy] = screenToWorld(sx, sy)
+      dragNode.x = wx; dragNode.y = wy; dragNode.vx = 0; dragNode.vy = 0; dragMoved = true
+    } else if (isPanning) {
+      tr.x = e.touches[0].clientX - panStart.x
+      tr.y = e.touches[0].clientY - panStart.y
+    }
+  } else if (e.touches.length === 2) {
+    const t0 = e.touches[0], t1 = e.touches[1]
+    const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY)
+    if (lastTouchDist) {
+      const factor = dist / lastTouchDist
+      const r = canvasRef.value!.getBoundingClientRect()
+      const sx = (t0.clientX + t1.clientX) / 2 - r.left
+      const sy = (t0.clientY + t1.clientY) / 2 - r.top
+      const ns = Math.max(0.12, Math.min(5, tr.s * factor))
+      tr.x = sx - (sx - tr.x) * (ns / tr.s)
+      tr.y = sy - (sy - tr.y) * (ns / tr.s)
+      tr.s = ns
+    }
+    lastTouchDist = dist
+  }
+}
+
+function onTouchEnd(e: TouchEvent) {
+  if (dragNode && !dragMoved) emit('openNote', dragNode.id)
+  dragNode = null; hovered = null
+  if (e.touches.length === 0) { isPanning = false; lastTouchDist = 0 }
+}
+
 function fitToScreen() {
   const c = canvasRef.value
   const visible = gNodes.filter(n => !hiddenTypes.has(n.type))
@@ -524,14 +582,24 @@ watch(() => props.notes.length, () => {
 
 onMounted(() => {
   initCanvas()
-  canvasRef.value?.addEventListener('wheel', onWheel, { passive: false })
+  const c = canvasRef.value!
+  c.addEventListener('wheel', onWheel, { passive: false })
+  c.addEventListener('touchstart', onTouchStart, { passive: false })
+  c.addEventListener('touchmove', onTouchMove, { passive: false })
+  c.addEventListener('touchend', onTouchEnd, { passive: false })
   ro = new ResizeObserver(initCanvas)
-  ro.observe(canvasRef.value!)
+  ro.observe(c)
 })
 
 onUnmounted(() => {
   if (rafId !== null) cancelAnimationFrame(rafId)
-  canvasRef.value?.removeEventListener('wheel', onWheel)
+  const c = canvasRef.value
+  if (c) {
+    c.removeEventListener('wheel', onWheel)
+    c.removeEventListener('touchstart', onTouchStart)
+    c.removeEventListener('touchmove', onTouchMove)
+    c.removeEventListener('touchend', onTouchEnd)
+  }
   ro?.disconnect()
 })
 </script>
@@ -577,7 +645,7 @@ onUnmounted(() => {
 
     <div class="graph-hint">
       {{ nodeCount }} 个笔记 &nbsp;·&nbsp; {{ edgeCount }} 条链接
-      &nbsp;·&nbsp; 右键操作 &nbsp;·&nbsp; 双击新建 &nbsp;·&nbsp; 滚轮缩放
+      <span class="graph-hint-extra">&nbsp;·&nbsp; 右键操作 &nbsp;·&nbsp; 双击新建 &nbsp;·&nbsp; 滚轮缩放</span>
     </div>
 
     <!-- Search active indicator -->
@@ -757,6 +825,24 @@ onUnmounted(() => {
   font-size: 14px;
   color: rgba(100,116,139,0.6);
   pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .graph-hint {
+    font-size: 10px;
+    max-width: calc(100% - 100px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .graph-hint-extra { display: none; }
+  .graph-toolbar { top: 10px; right: 12px; }
+  .graph-legend {
+    bottom: 12px;
+    right: 10px;
+    padding: 7px 10px;
+    gap: 4px;
+    font-size: 10px;
+  }
 }
 </style>
 

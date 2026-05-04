@@ -363,8 +363,17 @@ const createSpace = async () => {
   if (!name) return
   showNewSpace.value = false
   newSpaceName.value = ''
-  await switchSpace(name)
-  await fetchSpaces()
+  try {
+    await authFetch('/api/spaces', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ name }),
+    })
+    await fetchSpaces()
+    await switchSpace(name)
+  } catch {
+    showToast('创建空间失败', 'error')
+  }
 }
 
 // ── PPT Generation ────────────────────────────────────────────────────────
@@ -910,8 +919,8 @@ onUnmounted(() => {
               </svg>
               <span class="btn-label">编辑</span>
             </button>
-            <!-- PPT button -->
-            <button class="btn-ghost-sm" :disabled="isGeneratingPPT" @click="generatePPT">
+            <!-- PPT button (desktop only) -->
+            <button class="btn-ghost-sm btn-ppt-trigger" :disabled="isGeneratingPPT" @click="generatePPT">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
                 <rect x="1" y="2" width="14" height="12" rx="2"/>
                 <path d="M5 6h3.5a1.5 1.5 0 0 1 0 3H5V6z"/>
@@ -2503,6 +2512,7 @@ onUnmounted(() => {
 
   /* Viewer header: compact icon-only buttons */
   .btn-label { display: none; }
+  .btn-ppt-trigger { display: none; }
 
   .viewer-header {
     padding: 10px 14px;
