@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
 import { useUser, useClerk } from '@clerk/vue'
 import GraphView from './GraphView.vue'
