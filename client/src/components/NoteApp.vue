@@ -35,6 +35,7 @@ interface NoteMeta {
   created: string
   updated: string
   preview?: string
+  space?: string
 }
 
 interface NoteDetail extends NoteMeta {
@@ -106,8 +107,25 @@ let compileProgressTimer: ReturnType<typeof setInterval> | null = null
 const showMobileSidebar = ref(false)
 watch([view, selectedType, activeTag], () => { showMobileSidebar.value = false })
 
+// ── Knowledge Spaces ──────────────────────────────────────────────────────
+const currentSpace   = ref('默认')
+const spaces         = ref<{ name: string; count: number }[]>([])
+const newSpaceName   = ref('')
+const showNewSpace   = ref(false)
+const newSpaceInputRef = ref<HTMLInputElement | null>(null)
+
+const allSpaces = computed(() => {
+  if (!spaces.value.find(s => s.name === currentSpace.value)) {
+    return [{ name: currentSpace.value, count: 0 }, ...spaces.value]
+  }
+  return spaces.value
+})
+
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
+
+// ── PPT State ─────────────────────────────────────────────────────────────
+const isGeneratingPPT = ref(false)
 
 // ── Chat State ────────────────────────────────────────────────────────────
 const chatOpen      = ref(false)
@@ -216,11 +234,16 @@ const headers = () => ({
 const fetchNotes = async () => {
   isLoading.value = true
   try {
-    const res = await authFetch('/api/notes')
+    const res = await authFetch(`/api/notes?space=${encodeURIComponent(currentSpace.value)}`)
     notes.value = await res.json()
   } finally {
     isLoading.value = false
   }
+}
+
+const fetchSpaces = async () => {
+  const res = await authFetch('/api/spaces')
+  spaces.value = await res.json()
 }
 
 const openNote = async (id: string) => {
@@ -250,7 +273,7 @@ const saveNote = async () => {
       await authFetch('/api/notes', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ title: editorTitle.value, content: editorContent.value, tags }),
+        body: JSON.stringify({ title: editorTitle.value, content: editorContent.value, tags, space: currentSpace.value }),
       })
     }
     await fetchNotes()
@@ -321,6 +344,60 @@ const compileNote = async () => {
     showToast('网络错误，请稍后重试', 'error')
   } finally {
     isCompiling.value = false
+  }
+}
+
+// ── Space Management ─────────────────────────────────────────────────────
+const switchSpace = async (name: string) => {
+  if (currentSpace.value === name) return
+  currentSpace.value = name
+  selectedType.value = 'all'
+  activeTag.value = null
+  searchQuery.value = ''
+  view.value = 'list'
+  await fetchNotes()
+}
+
+const createSpace = async () => {
+  const name = newSpaceName.value.trim()
+  if (!name) return
+  showNewSpace.value = false
+  newSpaceName.value = ''
+  await switchSpace(name)
+  await fetchSpaces()
+}
+
+// ── PPT Generation ────────────────────────────────────────────────────────
+const generatePPT = async () => {
+  if (!currentNote.value || isGeneratingPPT.value) return
+  isGeneratingPPT.value = true
+  showToast('正在生成 PPT，请稍候...', 'info')
+  try {
+    const token = await props.getToken()
+    const resp = await fetch(`/api/ppt/${currentNote.value.id}`, {
+      method: 'POST',
+      headers: {
+        ...headers(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!resp.ok) {
+      const err = await resp.json()
+      showToast(err.error || '生成失败', 'error')
+      return
+    }
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${currentNote.value.title.slice(0, 40)}.pptx`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast('PPT 已生成并下载')
+  } catch {
+    showToast('生成失败，请重试', 'error')
+  } finally {
+    isGeneratingPPT.value = false
   }
 }
 
@@ -470,6 +547,7 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
   fetchNotes()
+  fetchSpaces()
   window.addEventListener('keydown', handleGlobalKeydown)
 })
 
@@ -532,6 +610,38 @@ onUnmounted(() => {
           placeholder="搜索笔记… ⌘K"
         />
         <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">×</button>
+      </div>
+
+      <!-- Space Switcher -->
+      <div class="space-switcher">
+        <div class="space-list">
+          <button
+            v-for="s in allSpaces" :key="s.name"
+            class="space-item" :class="{ active: currentSpace === s.name }"
+            @click="switchSpace(s.name)"
+          >
+            <span class="space-dot" />
+            <span class="space-name">{{ s.name }}</span>
+            <span v-if="s.count" class="space-count">{{ s.count }}</span>
+          </button>
+        </div>
+        <div v-if="showNewSpace" class="space-new-row">
+          <input
+            ref="newSpaceInputRef"
+            v-model="newSpaceName"
+            class="space-new-input"
+            placeholder="空间名称..."
+            @keyup.enter="createSpace"
+            @keyup.escape="showNewSpace = false"
+          />
+          <button class="space-confirm-btn" @click="createSpace">确定</button>
+        </div>
+        <button v-else class="space-add-btn" @click="showNewSpace = true; nextTick(() => newSpaceInputRef?.focus())">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" width="10" height="10">
+            <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
+          </svg>
+          新建空间
+        </button>
       </div>
 
       <!-- Nav -->
@@ -792,19 +902,43 @@ onUnmounted(() => {
               <svg v-else viewBox="0 0 16 16" fill="none" stroke="#34D399" stroke-width="2" width="13" height="13">
                 <polyline points="2,8 6,12 14,4"/>
               </svg>
-              {{ copiedNote ? '已复制' : '复制' }}
+              <span class="btn-label">{{ copiedNote ? '已复制' : '复制' }}</span>
             </button>
-            <button v-if="currentNote.type === 'raw'" class="btn-ghost-sm" @click="openEditor(currentNote)">编辑</button>
+            <button v-if="currentNote.type === 'raw'" class="btn-ghost-sm" @click="openEditor(currentNote)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                <path d="M11 2l3 3-9 9H2v-3L11 2z"/>
+              </svg>
+              <span class="btn-label">编辑</span>
+            </button>
+            <!-- PPT button -->
+            <button class="btn-ghost-sm" :disabled="isGeneratingPPT" @click="generatePPT">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                <rect x="1" y="2" width="14" height="12" rx="2"/>
+                <path d="M5 6h3.5a1.5 1.5 0 0 1 0 3H5V6z"/>
+                <line x1="5" y1="11" x2="8" y2="11"/>
+              </svg>
+              <span class="btn-label">{{ isGeneratingPPT ? '生成中' : 'PPT' }}</span>
+            </button>
             <button class="btn-ghost-sm" :class="{ 'chat-active': chatOpen }" @click="chatOpen = !chatOpen">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
                 <path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l3 3 3-3h3a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/>
               </svg>
-              {{ chatOpen ? '收起' : '对话' }}
+              <span class="btn-label">{{ chatOpen ? '收起' : '对话' }}</span>
             </button>
             <template v-if="confirmDeleteId === currentNote.id">
-              <span class="delete-confirm-text">确定删除？</span>
-              <button class="btn-confirm-del" @click="deleteNote(currentNote.id); confirmDeleteId = null">删除</button>
-              <button class="btn-ghost-sm" @click="cancelDelete">取消</button>
+              <span class="delete-confirm-text"><span class="btn-label">确定删除？</span></span>
+              <button class="btn-confirm-del" @click="deleteNote(currentNote.id); confirmDeleteId = null">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                  <polyline points="2,4 14,4"/><path d="M5 4V2h6v2"/><rect x="3" y="4" width="10" height="10" rx="1"/>
+                </svg>
+                <span class="btn-label">删除</span>
+              </button>
+              <button class="btn-ghost-sm" @click="cancelDelete">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                  <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+                </svg>
+                <span class="btn-label">取消</span>
+              </button>
             </template>
             <button v-else class="btn-delete" @click="startDelete(currentNote.id)">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
@@ -2145,6 +2279,115 @@ onUnmounted(() => {
   background: rgba(99,102,241,0.08);
 }
 
+/* ── Knowledge Spaces ── */
+.space-switcher {
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.space-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 4px;
+}
+
+.space-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  font-family: inherit;
+}
+.space-item:hover { background: rgba(255,255,255,0.04); color: var(--text-2); }
+.space-item.active { background: rgba(99,102,241,0.1); color: var(--text); }
+
+.space-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(99,102,241,0.35);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.space-item.active .space-dot { background: var(--accent-lt); }
+
+.space-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.space-count {
+  font-size: 10px;
+  color: var(--text-3);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 99px;
+}
+
+.space-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s;
+  font-family: inherit;
+}
+.space-add-btn:hover { color: var(--text-2); }
+
+.space-new-row {
+  display: flex;
+  gap: 4px;
+  padding: 3px 2px;
+}
+
+.space-new-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.space-new-input:focus { border-color: var(--accent); }
+.space-new-input::placeholder { color: var(--text-3); }
+
+.space-confirm-btn {
+  padding: 5px 10px;
+  background: rgba(99,102,241,0.12);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 6px;
+  color: var(--accent-lt);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.space-confirm-btn:hover { background: rgba(99,102,241,0.2); }
+
+/* ── btn-label (hidden on mobile) ── */
+.btn-label {
+  /* visible on desktop, hidden on mobile via media query */
+}
+
 /* ── Mobile Header (hidden on desktop) ── */
 .mobile-header {
   display: none;
@@ -2258,6 +2501,25 @@ onUnmounted(() => {
     width: 100%;
   }
 
+  /* Viewer header: compact icon-only buttons */
+  .btn-label { display: none; }
+
+  .viewer-header {
+    padding: 10px 14px;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+  .viewer-meta { flex-shrink: 1; min-width: 0; }
+  .viewer-date { display: none; }
+  .viewer-actions { flex-wrap: nowrap; gap: 4px; flex-shrink: 0; }
+
+  .btn-ghost-sm {
+    padding: 7px 8px;
+    gap: 0;
+  }
+  .delete-confirm-text { display: none; }
+  .btn-confirm-del { padding: 6px 8px; }
+
   /* Tighten padding across views */
   .list-header { padding: 14px 16px 12px; }
   .cards {
@@ -2266,9 +2528,6 @@ onUnmounted(() => {
     gap: 10px;
   }
 
-  .viewer-header { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
-  .viewer-meta { flex-wrap: wrap; }
-  .viewer-actions { flex-wrap: wrap; gap: 6px; }
   .viewer-body { padding: 16px 16px 40px; max-width: 100%; }
   .viewer-title { font-size: 20px; }
 
