@@ -205,6 +205,21 @@ const filteredNotes = computed(() => {
   return r
 })
 
+const noteGroups = computed(() => {
+  const notes = filteredNotes.value
+  const dated = notes.filter(n => n.date)
+  if (dated.length < 2) return null
+  const map = new Map<string, NoteMeta[]>()
+  for (const n of notes) {
+    const key = n.date || ''
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(n)
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, items]) => ({ date, items }))
+})
+
 const typeCounts = computed(() => {
   const counts: Record<string, number> = {}
   for (const n of notes.value) {
@@ -968,6 +983,35 @@ onUnmounted(() => {
           <small v-else-if="selectedType === 'raw' || selectedType === 'all'">点击「新建笔记」开始记录</small>
           <small v-else>编译原始笔记后将在这里生成</small>
         </div>
+
+        <template v-else-if="noteGroups">
+          <div v-for="group in noteGroups" :key="group.date" class="date-group">
+            <div class="date-group-header">{{ group.date }}</div>
+            <div class="cards">
+              <div
+                v-for="note in group.items" :key="note.id"
+                class="card" @click="openNote(note.id)"
+              >
+                <div v-if="note.read === false" class="unread-dot" />
+                <div class="card-top">
+                  <span class="card-type-badge" :style="{ color: TYPE_COLORS[note.type], borderColor: TYPE_COLORS[note.type] + '30', background: TYPE_COLORS[note.type] + '10' }">
+                    {{ TYPE_ICONS[note.type] }} {{ TYPE_LABELS[note.type] }}
+                  </span>
+                  <span class="card-date">{{ new Date(note.updated).toLocaleDateString('zh-CN') }}</span>
+                </div>
+                <h3 class="card-title">{{ note.title }}</h3>
+                <p v-if="note.preview" class="card-preview">{{ note.preview }}</p>
+                <div v-if="note.tags?.length" class="card-tags">
+                  <span v-for="tag in note.tags.slice(0, 3)" :key="tag" class="tag">{{ tag }}</span>
+                </div>
+                <div v-if="note.links?.length" class="card-links">
+                  <span class="links-label">链接</span>
+                  <span v-for="lnk in note.links.slice(0, 3)" :key="lnk" class="link-chip">{{ lnk }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
 
         <div v-else class="cards">
           <div
@@ -1841,6 +1885,21 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(248,113,113,0.2);
   pointer-events: none;
 }
+
+/* ── Date Groups ── */
+.date-group { display: flex; flex-direction: column; }
+
+.date-group-header {
+  padding: 16px 28px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.date-group .cards { border-bottom: none; }
 
 .card-top { display: flex; align-items: center; justify-content: space-between; }
 .card-type-badge {
