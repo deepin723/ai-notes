@@ -40,6 +40,8 @@ interface NoteMeta {
   updated: string
   preview?: string
   space?: string
+  date?: string
+  read?: boolean
 }
 
 interface NoteDetail extends NoteMeta {
@@ -284,6 +286,11 @@ const fetchSpaces = async () => {
 const openNote = async (id: string) => {
   const res = await authFetch(`/api/notes/${id}`)
   currentNote.value = await res.json()
+  // Clear unread badge in the local list immediately
+  const idx = notes.value.findIndex(n => n.id === id)
+  if (idx !== -1 && notes.value[idx].read === false) {
+    notes.value[idx] = { ...notes.value[idx], read: true }
+  }
   compiledPages.value = []
   compileProgress.value = 0
   chatOpen.value = false
@@ -967,6 +974,7 @@ onUnmounted(() => {
             v-for="note in filteredNotes" :key="note.id"
             class="card" @click="openNote(note.id)"
           >
+            <div v-if="note.read === false" class="unread-dot" />
             <div class="card-top">
               <span class="card-type-badge" :style="{ color: TYPE_COLORS[note.type], borderColor: TYPE_COLORS[note.type] + '30', background: TYPE_COLORS[note.type] + '10' }">
                 {{ TYPE_ICONS[note.type] }} {{ TYPE_LABELS[note.type] }}
@@ -1818,8 +1826,21 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
 }
 .card:hover { border-color: rgba(99,102,241,0.35); transform: translateY(-1px); }
+
+.unread-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #F87171;
+  box-shadow: 0 0 0 3px rgba(248,113,113,0.2);
+  pointer-events: none;
+}
 
 .card-top { display: flex; align-items: center; justify-content: space-between; }
 .card-type-badge {

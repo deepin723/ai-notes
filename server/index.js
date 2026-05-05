@@ -171,10 +171,15 @@ app.get('/api/notes', requireUser, (req, res) => {
   }
 })
 
-// Get single note (with content)
+// Get single note (with content) — marks unread notes as read on first open
 app.get('/api/notes/:id', requireUser, (req, res) => {
   const note = readNote(req.userId, req.params.id)
   if (!note) return res.status(404).json({ error: '笔记不存在' })
+  if (note.read === false) {
+    const { content, ...meta } = note
+    writeNote(req.userId, { ...meta, read: true }, content)
+    note.read = true
+  }
   res.json(note)
 })
 
