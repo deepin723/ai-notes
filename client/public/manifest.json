@@ -1,0 +1,12 @@
+{
+  "name": "Vki 知识图谱",
+  "short_name": "Vki",
+  "description": "个人知识管理与学习工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0D14",
+  "theme_color": "#6366F1",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

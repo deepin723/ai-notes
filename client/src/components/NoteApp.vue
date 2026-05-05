@@ -22,7 +22,7 @@ const userInitial = computed(() => {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type NoteType = 'raw' | 'entity' | 'concept' | 'summary' | 'synthesis' | 'comparison' | 'qa'
-type ViewMode = 'list' | 'editor' | 'viewer' | 'graph'
+type ViewMode = 'list' | 'editor' | 'viewer' | 'graph' | 'review'
 
 interface NoteMeta {
   id: string
@@ -32,6 +32,10 @@ interface NoteMeta {
   links: string[]
   sourceId?: string
   compiledAt?: string
+  reviewInterval?: number
+  reviewCount?: number
+  reviewedAt?: string
+  nextReviewAt?: string
   created: string
   updated: string
   preview?: string
@@ -119,13 +123,25 @@ const renameInputRef = ref<HTMLInputElement | null>(null)
 
 const allSpaces = computed(() => spaces.value)
 
-const allSpaces = computed(() => spaces.value)
-
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
 
 // ── PPT State ─────────────────────────────────────────────────────────────
 const isGeneratingPPT = ref(false)
+
+// ── Review State ──────────────────────────────────────────────────────────
+const reviewQueue      = ref<NoteMeta[]>([])
+const reviewIdx        = ref(0)
+const reviewNote       = ref<NoteDetail | null>(null)
+const reviewLoading    = ref(false)
+const reviewDone       = ref(false)
+
+const reviewDueCount   = computed(() => reviewQueue.value.length)
+
+// ── Push Notification State ───────────────────────────────────────────────
+const pushSupported    = ref('serviceWorker' in navigator && 'PushManager' in window)
+const pushSubscribed   = ref(false)
+const pushLoading      = ref(false)
 
 // ── Chat State ────────────────────────────────────────────────────────────
 const chatOpen      = ref(false)
@@ -212,6 +228,12 @@ const wordCount = computed(() => ({
 }))
 
 const renderedPreview = computed(() => renderMarkdown(editorContent.value))
+
+const backlinks = computed(() => {
+  if (!currentNote.value) return []
+  const title = currentNote.value.title
+  return notes.value.filter(n => n.id !== currentNote.value!.id && n.links?.includes(title))
+})
 
 // ── API Helpers ────────────────────────────────────────────────────────────
 const authFetch = async (url: string, options: RequestInit = {}) => {
@@ -445,6 +467,104 @@ const generatePPT = async () => {
   }
 }
 
+// ── Enroll / Review ────────────────────────────────────────────────────────
+const fetchReviewQueue = async () => {
+  try {
+    const res = await authFetch('/api/review-queue')
+    reviewQueue.value = await res.json()
+  } catch {}
+}
+
+const startReview = async () => {
+  await fetchReviewQueue()
+  if (!reviewQueue.value.length) { showToast('暂无需要复习的笔记', 'info'); return }
+  reviewIdx.value = 0
+  reviewDone.value = false
+  view.value = 'review'
+  await loadReviewNote()
+}
+
+const loadReviewNote = async () => {
+  const meta = reviewQueue.value[reviewIdx.value]
+  if (!meta) { reviewDone.value = true; reviewNote.value = null; return }
+  reviewLoading.value = true
+  try {
+    const res = await authFetch(`/api/notes/${meta.id}`)
+    reviewNote.value = await res.json()
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+const submitReview = async (rating: 'easy' | 'medium' | 'hard') => {
+  if (!reviewNote.value) return
+  try {
+    await authFetch(`/api/notes/${reviewNote.value.id}/review`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ rating }),
+    })
+    reviewIdx.value++
+    if (reviewIdx.value >= reviewQueue.value.length) {
+      reviewDone.value = true
+      reviewNote.value = null
+      await fetchReviewQueue()
+    } else {
+      await loadReviewNote()
+    }
+  } catch { showToast('提交失败，请重试', 'error') }
+}
+
+const enrollReview = async () => {
+  if (!currentNote.value) return
+  try {
+    await authFetch(`/api/notes/${currentNote.value.id}/enroll-review`, { method: 'POST', headers: headers() })
+    await fetchReviewQueue()
+    showToast('已加入复习计划')
+    const updated = await authFetch(`/api/notes/${currentNote.value.id}`)
+    currentNote.value = await updated.json()
+  } catch { showToast('操作失败', 'error') }
+}
+
+// ── Web Push ───────────────────────────────────────────────────────────────
+const initPush = async () => {
+  if (!pushSupported.value) return
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    const existing = await reg.pushManager.getSubscription()
+    pushSubscribed.value = !!existing
+  } catch {}
+}
+
+const togglePushSubscription = async () => {
+  if (!pushSupported.value || pushLoading.value) return
+  pushLoading.value = true
+  try {
+    const reg = await navigator.serviceWorker.ready
+    if (pushSubscribed.value) {
+      const sub = await reg.pushManager.getSubscription()
+      if (sub) {
+        await sub.unsubscribe()
+        await authFetch('/api/push/unsubscribe', { method: 'DELETE', headers: headers(), body: JSON.stringify({ endpoint: sub.endpoint }) })
+      }
+      pushSubscribed.value = false
+      showToast('已关闭推送通知')
+    } else {
+      const keyRes = await authFetch('/api/push/vapid-key')
+      const { publicKey } = await keyRes.json()
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: publicKey,
+      })
+      await authFetch('/api/push/subscribe', { method: 'POST', headers: headers(), body: JSON.stringify({ subscription: sub }) })
+      pushSubscribed.value = true
+      showToast('已开启每日复习提醒')
+    }
+  } catch (err) {
+    showToast('推送设置失败，请确认浏览器权限', 'error')
+  } finally {
+    pushLoading.value = false
+  }
+}
+
 // ── Copy Note Content ─────────────────────────────────────────────────────
 const copyNoteContent = async () => {
   if (!currentNote.value) return
@@ -592,6 +712,8 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
 onMounted(() => {
   fetchNotes()
   fetchSpaces()
+  fetchReviewQueue()
+  initPush()
   window.addEventListener('keydown', handleGlobalKeydown)
 })
 
@@ -708,6 +830,14 @@ onUnmounted(() => {
       <!-- Nav -->
       <nav class="nav">
         <button
+          class="nav-item" :class="{ active: view === 'review' }"
+          @click="startReview"
+        >
+          <span class="nav-icon" style="color: #FBBF24">◷</span>
+          <span class="nav-label">今日复习</span>
+          <span v-if="reviewDueCount > 0" class="nav-badge">{{ reviewDueCount }}</span>
+        </button>
+        <button
           class="nav-item" :class="{ active: view === 'graph' }"
           @click="view = 'graph'; activeTag = null; searchQuery = ''"
         >
@@ -762,6 +892,13 @@ onUnmounted(() => {
             <path d="M10 3v1.5M10 15.5V17M3 10h1.5M15.5 10H17M5.05 5.05l1.06 1.06M13.89 13.89l1.06 1.06M5.05 14.95l1.06-1.06M13.89 6.11l1.06-1.06"/>
           </svg>
           API 设置
+        </button>
+        <button v-if="pushSupported" class="btn-push-toggle" :class="{ subscribed: pushSubscribed }" :disabled="pushLoading" @click="togglePushSubscription">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13">
+            <path d="M8 1a5 5 0 0 1 5 5v3l1.5 2H1.5L3 9V6a5 5 0 0 1 5-5z"/>
+            <path d="M6.5 13a1.5 1.5 0 0 0 3 0"/>
+          </svg>
+          {{ pushSubscribed ? '推送已开启' : '开启每日提醒' }}
         </button>
       </div>
     </aside>
@@ -937,6 +1074,75 @@ onUnmounted(() => {
         </div>
       </template>
 
+      <!-- REVIEW VIEW -->
+      <template v-else-if="view === 'review'">
+        <div class="review-header">
+          <button class="btn-back" @click="view = 'list'">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <polyline points="10,3 4,8 10,13"/>
+            </svg>
+            返回
+          </button>
+          <h2 class="review-heading">今日复习</h2>
+          <span v-if="!reviewDone" class="review-progress-text">{{ reviewIdx + 1 }} / {{ reviewQueue.length }}</span>
+        </div>
+
+        <!-- Done state -->
+        <div v-if="reviewDone" class="review-done">
+          <svg viewBox="0 0 48 48" fill="none" stroke="#34D399" stroke-width="2" width="52" height="52">
+            <circle cx="24" cy="24" r="20"/><polyline points="14,24 20,30 34,16"/>
+          </svg>
+          <p class="review-done-title">全部复习完成！</p>
+          <p class="review-done-sub">今日 {{ reviewQueue.length }} 条笔记已复习，保持下去 💪</p>
+          <button class="btn-ghost" @click="view = 'list'">返回笔记列表</button>
+        </div>
+
+        <!-- Loading -->
+        <div v-else-if="reviewLoading" class="review-loading">
+          <div class="spinner" />
+        </div>
+
+        <!-- Flashcard -->
+        <div v-else-if="reviewNote" class="review-card-wrap">
+          <div class="review-progress-bar">
+            <div class="review-progress-fill" :style="{ width: (reviewIdx / reviewQueue.length * 100) + '%' }" />
+          </div>
+          <div class="review-card">
+            <div class="review-card-meta">
+              <span class="card-type-badge" :style="{ color: TYPE_COLORS[reviewNote.type], borderColor: TYPE_COLORS[reviewNote.type] + '30', background: TYPE_COLORS[reviewNote.type] + '10' }">
+                {{ TYPE_ICONS[reviewNote.type] }} {{ TYPE_LABELS[reviewNote.type] }}
+              </span>
+              <span v-if="reviewNote.reviewCount" class="review-count-badge">已复习 {{ reviewNote.reviewCount }} 次</span>
+            </div>
+            <h2 class="review-card-title">{{ reviewNote.title }}</h2>
+            <div v-if="reviewNote.tags?.length" class="viewer-tags">
+              <span v-for="tag in reviewNote.tags" :key="tag" class="tag">{{ tag }}</span>
+            </div>
+            <div class="review-card-content md-body" v-html="renderMarkdown(reviewNote.content)" @click="handleContentClick" />
+          </div>
+          <div class="review-rating">
+            <p class="review-rating-label">记忆情况如何？</p>
+            <div class="review-rating-btns">
+              <button class="review-btn hard" @click="submitReview('hard')">
+                <span class="review-btn-icon">😅</span>
+                <span class="review-btn-label">困难</span>
+                <span class="review-btn-hint">明天再来</span>
+              </button>
+              <button class="review-btn medium" @click="submitReview('medium')">
+                <span class="review-btn-icon">🤔</span>
+                <span class="review-btn-label">一般</span>
+                <span class="review-btn-hint">{{ Math.round((reviewNote.reviewInterval || 1) * 1.5) }}天后</span>
+              </button>
+              <button class="review-btn easy" @click="submitReview('easy')">
+                <span class="review-btn-icon">😊</span>
+                <span class="review-btn-label">轻松</span>
+                <span class="review-btn-hint">{{ Math.round((reviewNote.reviewInterval || 1) * 2.5) }}天后</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>
+
       <!-- VIEWER VIEW -->
       <template v-else-if="view === 'viewer' && currentNote">
         <div class="viewer-header">
@@ -970,6 +1176,13 @@ onUnmounted(() => {
                 <path d="M11 2l3 3-9 9H2v-3L11 2z"/>
               </svg>
               <span class="btn-label">编辑</span>
+            </button>
+            <!-- Enroll in spaced repetition -->
+            <button class="btn-ghost-sm" :class="{ 'review-enrolled': currentNote.nextReviewAt }" @click="enrollReview">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
+                <circle cx="8" cy="8" r="6"/><polyline points="8,4 8,8 11,10"/>
+              </svg>
+              <span class="btn-label">{{ currentNote.nextReviewAt ? '复习中' : '加入复习' }}</span>
             </button>
             <!-- PPT button (desktop only) -->
             <button class="btn-ghost-sm btn-ppt-trigger" :disabled="isGeneratingPPT" @click="generatePPT">
@@ -1097,6 +1310,20 @@ onUnmounted(() => {
                 @click="handleContentClick({ target: { classList: { contains: (c: string) => c === 'wikilink' }, dataset: { title } } } as unknown as MouseEvent)"
               >
                 {{ title }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Backlinks: notes that reference this note -->
+          <div v-if="backlinks.length" class="viewer-backlinks">
+            <p class="links-heading">被引用</p>
+            <div class="links-list">
+              <button
+                v-for="bl in backlinks" :key="bl.id"
+                class="link-btn backlink-btn"
+                @click="openNote(bl.id)"
+              >
+                <span class="backlink-icon">←</span> {{ bl.title }}
               </button>
             </div>
           </div>
@@ -2654,6 +2881,211 @@ onUnmounted(() => {
   .app.editor-mode .editor-preview-pane {
     display: none !important;
   }
+
+  .review-card { margin: 12px 12px 0; padding: 16px; }
+  .review-rating-btns { gap: 8px; }
+  .review-btn { padding: 10px 16px; min-width: 72px; }
+}
+
+/* ── Nav Badge ── */
+.nav-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #FBBF24;
+  padding: 1px 6px;
+  border-radius: 99px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* ── Review View ── */
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+.review-heading { font-size: 16px; font-weight: 600; color: var(--text); }
+
+.review-progress-text {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-done {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 24px;
+}
+
+.review-done-title { font-size: 20px; font-weight: 700; color: var(--text); }
+.review-done-sub { font-size: 14px; color: var(--text-3); }
+
+.review-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.review-card-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.review-progress-bar {
+  height: 3px;
+  background: rgba(99,102,241,0.12);
+  flex-shrink: 0;
+}
+
+.review-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-dk), var(--accent-lt));
+  transition: width 0.5s ease;
+}
+
+.review-card {
+  margin: 24px auto;
+  width: 100%;
+  max-width: 760px;
+  padding: 28px 36px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.review-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-count-badge {
+  font-size: 11px;
+  color: var(--text-3);
+  background: rgba(255,255,255,0.05);
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+.review-card-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.review-card-content {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.review-rating {
+  padding: 20px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.review-rating-label {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.review-rating-btns {
+  display: flex;
+  gap: 12px;
+}
+
+.review-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  min-width: 88px;
+}
+.review-btn:hover { transform: translateY(-2px); }
+.review-btn.hard:hover  { border-color: rgba(248,113,113,0.5); background: rgba(248,113,113,0.06); }
+.review-btn.medium:hover { border-color: rgba(251,191,36,0.5); background: rgba(251,191,36,0.06); }
+.review-btn.easy:hover  { border-color: rgba(52,211,153,0.5); background: rgba(52,211,153,0.06); }
+
+.review-btn-icon { font-size: 22px; line-height: 1; }
+.review-btn-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.review-btn-hint { font-size: 11px; color: var(--text-3); }
+
+/* ── Backlinks ── */
+.viewer-backlinks {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.backlink-btn {
+  background: rgba(99,102,241,0.04);
+  border-color: rgba(99,102,241,0.15);
+  color: var(--text-3);
+}
+.backlink-btn:hover { background: rgba(99,102,241,0.1); color: var(--accent-lt); }
+
+.backlink-icon {
+  font-size: 11px;
+  opacity: 0.5;
+  margin-right: 2px;
+}
+
+/* ── Push Toggle ── */
+.btn-push-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.btn-push-toggle:hover { color: var(--text-2); background: rgba(255,255,255,0.04); }
+.btn-push-toggle.subscribed { color: #FBBF24; }
+.btn-push-toggle:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Review enrolled button style ── */
+.btn-ghost-sm.review-enrolled {
+  border-color: rgba(251,191,36,0.35);
+  color: #FBBF24;
+  background: rgba(251,191,36,0.06);
 }
 </style>
 

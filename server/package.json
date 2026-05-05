@@ -13,6 +13,7 @@
     "express": "^4.18.0",
     "gray-matter": "^4.0.3",
     "pptxgenjs": "^3.12.0",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "web-push": "^3.6.7"
   }
 }

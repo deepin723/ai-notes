@@ -8,6 +8,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { clerkMiddleware, getAuth } from '@clerk/express'
 import pptxgen from 'pptxgenjs'
+import webpush from 'web-push'
 
 dotenv.config()
 
@@ -90,6 +91,37 @@ const readUserSettings = (userId) => {
 
 const writeUserSettings = (userId, settings) => {
   fs.writeFileSync(userSettingsPath(userId), JSON.stringify(settings), 'utf8')
+}
+
+// ── VAPID / Web Push helpers ───────────────────────────────────────────────
+
+const vapidFilePath = path.join(BASE_DATA_DIR, '__vapid__.json')
+
+function getVapidKeys() {
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    return { publicKey: process.env.VAPID_PUBLIC_KEY, privateKey: process.env.VAPID_PRIVATE_KEY }
+  }
+  if (fs.existsSync(vapidFilePath)) {
+    try { return JSON.parse(fs.readFileSync(vapidFilePath, 'utf8')) } catch {}
+  }
+  const keys = webpush.generateVAPIDKeys()
+  fs.writeFileSync(vapidFilePath, JSON.stringify(keys), 'utf8')
+  return keys
+}
+
+const vapidKeys = getVapidKeys()
+webpush.setVapidDetails('mailto:noreply@vki.app', vapidKeys.publicKey, vapidKeys.privateKey)
+
+const pushSubsPath = (userId) => path.join(userDir(userId), '__push_subs__.json')
+
+const readPushSubs = (userId) => {
+  const fp = pushSubsPath(userId)
+  if (!fs.existsSync(fp)) return []
+  try { return JSON.parse(fs.readFileSync(fp, 'utf8')) } catch { return [] }
+}
+
+const writePushSubs = (userId, subs) => {
+  fs.writeFileSync(pushSubsPath(userId), JSON.stringify(subs), 'utf8')
 }
 
 const readNote = (userId, id) => {
@@ -443,6 +475,84 @@ app.put('/api/user-settings', requireUser, (req, res) => {
   res.json({ ok: true })
 })
 
+// Spaced repetition review queue
+app.get('/api/review-queue', requireUser, (req, res) => {
+  try {
+    const now = new Date().toISOString()
+    const allNotes = listNotes(req.userId)
+    const due = allNotes.filter(n => n.nextReviewAt && n.nextReviewAt <= now)
+    res.json(due)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Submit a spaced repetition review (SM-2 algorithm)
+app.post('/api/notes/:id/review', requireUser, (req, res) => {
+  const note = readNote(req.userId, req.params.id)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+
+  const { rating } = req.body // 'easy' | 'medium' | 'hard'
+  const { content: noteContent, ...meta } = note
+
+  const prevInterval = meta.reviewInterval || 1
+  const reviewCount = (meta.reviewCount || 0) + 1
+
+  let interval
+  if (rating === 'easy')        interval = Math.min(60, Math.round(Math.max(1, prevInterval) * 2.5))
+  else if (rating === 'medium') interval = Math.min(60, Math.round(Math.max(1, prevInterval) * 1.5))
+  else                          interval = 1 // hard: reset to 1 day
+
+  const now = new Date()
+  const nextReview = new Date(now.getTime() + interval * 24 * 60 * 60 * 1000)
+
+  const updated = {
+    ...meta,
+    reviewInterval: interval,
+    reviewCount,
+    reviewedAt: now.toISOString(),
+    nextReviewAt: nextReview.toISOString(),
+    updated: now.toISOString(),
+  }
+  writeNote(req.userId, updated, noteContent)
+  res.json(updated)
+})
+
+// Enroll a note in spaced repetition (sets nextReviewAt = now)
+app.post('/api/notes/:id/enroll-review', requireUser, (req, res) => {
+  const note = readNote(req.userId, req.params.id)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+  const { content: noteContent, ...meta } = note
+  const now = new Date().toISOString()
+  const updated = { ...meta, reviewInterval: 1, reviewCount: 0, nextReviewAt: now, updated: now }
+  writeNote(req.userId, updated, noteContent)
+  res.json(updated)
+})
+
+// Web Push: get VAPID public key
+app.get('/api/push/vapid-key', requireUser, (req, res) => {
+  res.json({ publicKey: vapidKeys.publicKey })
+})
+
+// Web Push: subscribe
+app.post('/api/push/subscribe', requireUser, (req, res) => {
+  const { subscription } = req.body
+  if (!subscription?.endpoint) return res.status(400).json({ error: '无效的推送订阅' })
+  const subs = readPushSubs(req.userId)
+  if (!subs.find(s => s.endpoint === subscription.endpoint)) {
+    subs.push(subscription)
+    writePushSubs(req.userId, subs)
+  }
+  res.json({ ok: true })
+})
+
+// Web Push: unsubscribe
+app.delete('/api/push/unsubscribe', requireUser, (req, res) => {
+  const { endpoint } = req.body
+  writePushSubs(req.userId, readPushSubs(req.userId).filter(s => s.endpoint !== endpoint))
+  res.json({ ok: true })
+})
+
 async function fetchImageData(keywords) {
   try {
     const url = `https://source.unsplash.com/1280x720/?${encodeURIComponent(keywords)}`
@@ -597,6 +707,56 @@ Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as inpu
     res.status(500).json({ error: err instanceof Error ? err.message : '未知错误' })
   }
 })
+
+// ── Daily Review Push Scheduler ──────────────────────────────────────────────
+
+async function sendDailyReviewPushes() {
+  try {
+    const now = new Date().toISOString()
+    for (const entry of fs.readdirSync(BASE_DATA_DIR)) {
+      const userPath = path.join(BASE_DATA_DIR, entry)
+      if (!fs.statSync(userPath).isDirectory()) continue
+      if (entry.startsWith('__')) continue
+      const userId = entry
+      const subs = readPushSubs(userId)
+      if (!subs.length) continue
+      const allNotes = listNotes(userId)
+      const dueCount = allNotes.filter(n => n.nextReviewAt && n.nextReviewAt <= now).length
+      if (!dueCount) continue
+      const payload = JSON.stringify({
+        title: 'Vki 复习提醒',
+        body: `你有 ${dueCount} 条笔记需要复习`,
+        url: '/',
+      })
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(sub, payload)
+        } catch (err) {
+          if (err.statusCode === 410) {
+            writePushSubs(userId, readPushSubs(userId).filter(s => s.endpoint !== sub.endpoint))
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[push] sendDailyReviewPushes error:', err)
+  }
+}
+
+function scheduleDailyReview() {
+  const now = new Date()
+  const next9am = new Date(now)
+  next9am.setHours(9, 0, 0, 0)
+  if (next9am <= now) next9am.setDate(next9am.getDate() + 1)
+  const delay = next9am.getTime() - now.getTime()
+  setTimeout(() => {
+    sendDailyReviewPushes()
+    setInterval(sendDailyReviewPushes, 24 * 60 * 60 * 1000)
+  }, delay)
+  console.log(`📅 Daily review push scheduled for ${next9am.toLocaleTimeString()}`)
+}
+
+scheduleDailyReview()
 
 // One-time migration: move root data/*.md into data/{userId}/
 app.post('/api/migrate', (req, res) => {
