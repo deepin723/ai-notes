@@ -108,7 +108,7 @@ const showMobileSidebar = ref(false)
 watch([view, selectedType, activeTag], () => { showMobileSidebar.value = false })
 
 // ── Knowledge Spaces ──────────────────────────────────────────────────────
-const currentSpace   = ref('默认')
+const currentSpace   = ref(localStorage.getItem('vki_current_space') || '默认')
 const spaces         = ref<{ name: string; count: number }[]>([])
 const newSpaceName   = ref('')
 const showNewSpace   = ref(false)
@@ -117,12 +117,9 @@ const renamingSpace  = ref<string | null>(null)
 const renameValue    = ref('')
 const renameInputRef = ref<HTMLInputElement | null>(null)
 
-const allSpaces = computed(() => {
-  if (!spaces.value.find(s => s.name === currentSpace.value)) {
-    return [{ name: currentSpace.value, count: 0 }, ...spaces.value]
-  }
-  return spaces.value
-})
+const allSpaces = computed(() => spaces.value)
+
+const allSpaces = computed(() => spaces.value)
 
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
@@ -247,6 +244,12 @@ const fetchNotes = async () => {
 const fetchSpaces = async () => {
   const res = await authFetch('/api/spaces')
   spaces.value = await res.json()
+  // If the stored space no longer exists, fall back to the first available one
+  if (spaces.value.length && !spaces.value.find(s => s.name === currentSpace.value)) {
+    currentSpace.value = spaces.value[0].name
+    localStorage.setItem('vki_current_space', currentSpace.value)
+    await fetchNotes()
+  }
 }
 
 const openNote = async (id: string) => {
@@ -354,6 +357,7 @@ const compileNote = async () => {
 const switchSpace = async (name: string) => {
   if (currentSpace.value === name) return
   currentSpace.value = name
+  localStorage.setItem('vki_current_space', name)
   selectedType.value = 'all'
   activeTag.value = null
   searchQuery.value = ''
@@ -396,7 +400,10 @@ const commitRename = async () => {
       headers: headers(),
       body: JSON.stringify({ oldName, newName }),
     })
-    if (currentSpace.value === oldName) currentSpace.value = newName
+    if (currentSpace.value === oldName) {
+      currentSpace.value = newName
+      localStorage.setItem('vki_current_space', newName)
+    }
     await fetchSpaces()
     showToast('空间已重命名')
   } catch {
