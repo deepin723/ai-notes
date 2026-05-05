@@ -235,6 +235,13 @@ const backlinks = computed(() => {
   return notes.value.filter(n => n.id !== currentNote.value!.id && n.links?.includes(title))
 })
 
+const outgoingLinks = computed(() => {
+  if (!currentNote.value) return []
+  return (currentNote.value.links || [])
+    .map(title => notes.value.find(n => n.title === title))
+    .filter(Boolean) as NoteMeta[]
+})
+
 // ── API Helpers ────────────────────────────────────────────────────────────
 const authFetch = async (url: string, options: RequestInit = {}) => {
   const token = await props.getToken()
@@ -1222,7 +1229,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="viewer-body">
+        <div class="viewer-content-wrap">
+          <div class="viewer-body">
           <h1 class="viewer-title">{{ currentNote.title }}</h1>
 
           <!-- Tags -->
@@ -1299,34 +1307,49 @@ onUnmounted(() => {
             v-html="renderMarkdown(currentNote.content)"
             @click="handleContentClick"
           />
-
-          <!-- Linked pages -->
-          <div v-if="currentNote.links?.length" class="viewer-links">
-            <p class="links-heading">关联页面</p>
-            <div class="links-list">
-              <button
-                v-for="title in currentNote.links" :key="title"
-                class="link-btn"
-                @click="handleContentClick({ target: { classList: { contains: (c: string) => c === 'wikilink' }, dataset: { title } } } as unknown as MouseEvent)"
-              >
-                {{ title }}
-              </button>
-            </div>
           </div>
 
-          <!-- Backlinks: notes that reference this note -->
-          <div v-if="backlinks.length" class="viewer-backlinks">
-            <p class="links-heading">被引用</p>
-            <div class="links-list">
-              <button
-                v-for="bl in backlinks" :key="bl.id"
-                class="link-btn backlink-btn"
-                @click="openNote(bl.id)"
-              >
-                <span class="backlink-icon">←</span> {{ bl.title }}
-              </button>
+          <!-- Right Links Panel -->
+          <aside class="viewer-aside" v-if="outgoingLinks.length || backlinks.length">
+            <!-- 我引用了谁 -->
+            <div v-if="outgoingLinks.length" class="aside-section">
+              <p class="aside-title">
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11">
+                  <line x1="2" y1="6" x2="10" y2="6"/><polyline points="7,3 10,6 7,9"/>
+                </svg>
+                引用了
+              </p>
+              <div class="aside-links">
+                <button
+                  v-for="note in outgoingLinks" :key="note.id"
+                  class="aside-link"
+                  @click="openNote(note.id)"
+                >
+                  <span class="aside-link-icon" :style="{ color: TYPE_COLORS[note.type] }">{{ TYPE_ICONS[note.type] }}</span>
+                  {{ note.title }}
+                </button>
+              </div>
             </div>
-          </div>
+            <!-- 谁引用了我 -->
+            <div v-if="backlinks.length" class="aside-section">
+              <p class="aside-title">
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" width="11" height="11">
+                  <line x1="10" y1="6" x2="2" y2="6"/><polyline points="5,3 2,6 5,9"/>
+                </svg>
+                被引用
+              </p>
+              <div class="aside-links">
+                <button
+                  v-for="bl in backlinks" :key="bl.id"
+                  class="aside-link backlink"
+                  @click="openNote(bl.id)"
+                >
+                  <span class="aside-link-icon" :style="{ color: TYPE_COLORS[bl.type] }">{{ TYPE_ICONS[bl.type] }}</span>
+                  {{ bl.title }}
+                </button>
+              </div>
+            </div>
+          </aside>
         </div>
 
         <!-- Chat Panel -->
@@ -2053,6 +2076,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
 }
 
 .viewer-title { font-size: 26px; font-weight: 700; color: var(--text); line-height: 1.3; }
@@ -2381,9 +2407,9 @@ onUnmounted(() => {
 .viewer-chat-mode {
   overflow: hidden;
 }
-.viewer-chat-mode .viewer-body {
+.viewer-chat-mode .viewer-content-wrap {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── Chat Panel ── */
@@ -2885,6 +2911,20 @@ onUnmounted(() => {
   .review-card { margin: 12px 12px 0; padding: 16px; }
   .review-rating-btns { gap: 8px; }
   .review-btn { padding: 10px 16px; min-width: 72px; }
+
+  /* Right panel: collapse to bottom on mobile */
+  .viewer-content-wrap { flex-direction: column; overflow-y: auto; }
+  .viewer-aside {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+    flex-direction: row;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .aside-section { flex: 1; min-width: 140px; }
+  .viewer-body { overflow-y: visible; padding: 16px 16px 24px; max-width: 100%; }
 }
 
 /* ── Nav Badge ── */
@@ -3039,7 +3079,74 @@ onUnmounted(() => {
 .review-btn-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .review-btn-hint { font-size: 11px; color: var(--text-3); }
 
-/* ── Backlinks ── */
+/* ── Viewer two-column layout ── */
+.viewer-content-wrap {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Right links aside ── */
+.viewer-aside {
+  width: 200px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-card);
+  overflow-y: auto;
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.aside-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aside-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  margin-bottom: 2px;
+}
+
+.aside-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aside-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 7px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.aside-link:hover { background: rgba(99,102,241,0.08); color: var(--accent-lt); }
+.aside-link.backlink:hover { background: rgba(52,211,153,0.07); color: #34D399; }
+
+.aside-link-icon { font-size: 11px; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Backlinks (old bottom sections — keep for mobile fallback) ── */
 .viewer-backlinks {
   border-top: 1px solid var(--border);
   padding-top: 16px;
