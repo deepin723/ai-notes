@@ -992,7 +992,7 @@ onUnmounted(() => {
                 v-for="note in group.items" :key="note.id"
                 class="card" @click="openNote(note.id)"
               >
-                <div v-if="note.date && note.read !== true" class="unread-dot" />
+                <div v-if="(note.date || note.space === '日报采编') && note.read !== true" class="unread-dot" />
                 <div class="card-top">
                   <span class="card-type-badge" :style="{ color: TYPE_COLORS[note.type], borderColor: TYPE_COLORS[note.type] + '30', background: TYPE_COLORS[note.type] + '10' }">
                     {{ TYPE_ICONS[note.type] }} {{ TYPE_LABELS[note.type] }}
@@ -1018,7 +1018,7 @@ onUnmounted(() => {
             v-for="note in filteredNotes" :key="note.id"
             class="card" @click="openNote(note.id)"
           >
-            <div v-if="note.date && note.read !== true" class="unread-dot" />
+            <div v-if="(note.date || note.space === '日报采编') && note.read !== true" class="unread-dot" />
             <div class="card-top">
               <span class="card-type-badge" :style="{ color: TYPE_COLORS[note.type], borderColor: TYPE_COLORS[note.type] + '30', background: TYPE_COLORS[note.type] + '10' }">
                 {{ TYPE_ICONS[note.type] }} {{ TYPE_LABELS[note.type] }}
