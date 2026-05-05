@@ -79,6 +79,19 @@ const writeUserSpaces = (userId, spaces) => {
   fs.writeFileSync(spacesFilePath(userId), JSON.stringify(spaces), 'utf8')
 }
 
+const userSettingsPath = (userId) => path.join(userDir(userId), '__user_settings__.json')
+
+const readUserSettings = (userId) => {
+  const fp = userSettingsPath(userId)
+  if (!fs.existsSync(fp)) return {}
+  try { return JSON.parse(fs.readFileSync(fp, 'utf8')) }
+  catch { return {} }
+}
+
+const writeUserSettings = (userId, settings) => {
+  fs.writeFileSync(userSettingsPath(userId), JSON.stringify(settings), 'utf8')
+}
+
 const readNote = (userId, id) => {
   const fp = notePath(userId, id)
   if (!fs.existsSync(fp)) return null
@@ -390,48 +403,127 @@ app.post('/api/spaces', requireUser, (req, res) => {
   res.json({ ok: true, name: cleanName })
 })
 
-function buildPPT(outline) {
+// Rename a space (updates all notes in that space)
+app.put('/api/spaces/rename', requireUser, (req, res) => {
+  const { oldName, newName } = req.body
+  if (!oldName || !newName?.trim()) return res.status(400).json({ error: '请提供空间名称' })
+  const cleanNew = newName.trim()
+  if (cleanNew === oldName) return res.json({ ok: true, newName: cleanNew })
+
+  const spaces = readUserSpaces(req.userId)
+  const idx = spaces.indexOf(oldName)
+  if (idx < 0) return res.status(404).json({ error: '空间不存在' })
+  spaces[idx] = cleanNew
+  writeUserSpaces(req.userId, spaces)
+
+  // Update all notes in this space
+  const dir = userDir(req.userId)
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.md'))) {
+    const fp = path.join(dir, file)
+    const { data, content } = matter.read(fp)
+    if (!data.id) continue
+    if ((data.space || '默认') === oldName) {
+      writeNote(req.userId, { ...data, space: cleanNew }, content.trim())
+    }
+  }
+
+  res.json({ ok: true, newName: cleanNew })
+})
+
+// User settings (API key sync across devices)
+app.get('/api/user-settings', requireUser, (req, res) => {
+  const s = readUserSettings(req.userId)
+  res.json({ apiKey: s.apiKey || '', baseUrl: s.baseUrl || '', synced: !!s.apiKey })
+})
+
+app.put('/api/user-settings', requireUser, (req, res) => {
+  const { apiKey, baseUrl } = req.body
+  const cur = readUserSettings(req.userId)
+  writeUserSettings(req.userId, { ...cur, ...(apiKey !== undefined && { apiKey }), ...(baseUrl !== undefined && { baseUrl }) })
+  res.json({ ok: true })
+})
+
+async function fetchImageData(keywords) {
+  try {
+    const url = `https://source.unsplash.com/1280x720/?${encodeURIComponent(keywords)}`
+    const resp = await fetch(url, { signal: AbortSignal.timeout(7000) })
+    if (!resp.ok) return null
+    const buf = await resp.arrayBuffer()
+    const ct = resp.headers.get('content-type') || 'image/jpeg'
+    return `data:${ct};base64,${Buffer.from(buf).toString('base64')}`
+  } catch { return null }
+}
+
+async function buildPPT(outline) {
   const prs = new pptxgen()
   prs.layout = 'LAYOUT_WIDE'
 
+  const accent = ['4F46E5', '7C3AED', '0EA5E9', '059669', 'D97706', 'DC2626', 'EC4899']
+
+  // ── Title slide ──────────────────────────────────────────────────────────
   const title = prs.addSlide()
-  title.background = { color: '0A0D14' }
+  const coverImg = await fetchImageData(outline.cover_keywords || outline.title.slice(0, 40))
+  if (coverImg) {
+    title.background = { data: coverImg }
+    title.addShape(prs.ShapeType.rect, { x: 0, y: 0, w: 10, h: 5.63, fill: { color: '000000', transparency: 30 } })
+  } else {
+    title.background = { color: '0A0D14' }
+    title.addShape(prs.ShapeType.ellipse, { x: 6.8, y: -1.2, w: 5, h: 5, fill: { color: '6366F1', transparency: 88 }, line: { color: '6366F1', transparency: 100 } })
+  }
+
   title.addText(outline.title || '演示文稿', {
-    x: 0.5, y: 1.6, w: 9, h: 2,
-    fontSize: 34, bold: true, color: 'F1F5F9',
-    align: 'center', wrap: true,
+    x: 0.5, y: 1.5, w: 9, h: 2.2,
+    fontSize: 38, bold: true, color: 'F1F5F9', align: 'center', wrap: true,
+    shadow: { type: 'outer', color: '000000', opacity: 0.7, blur: 10, offset: 3, angle: 45 },
   })
   if (outline.subtitle) {
     title.addText(outline.subtitle, {
-      x: 0.5, y: 3.8, w: 9, h: 0.8,
-      fontSize: 17, color: '94A3B8', align: 'center',
+      x: 0.5, y: 3.9, w: 9, h: 0.9,
+      fontSize: 18, color: 'CBD5E1', align: 'center',
     })
   }
 
-  for (let idx = 0; idx < (outline.slides || []).length; idx++) {
-    const sd = outline.slides[idx]
+  // ── Content slides ────────────────────────────────────────────────────────
+  const slides = outline.slides || []
+  for (let idx = 0; idx < slides.length; idx++) {
+    const sd = slides[idx]
+    const color = accent[idx % accent.length]
     const s = prs.addSlide()
     s.background = { color: '0A0D14' }
 
-    s.addText(sd.title || '', {
-      x: 0.5, y: 0.3, w: 8.5, h: 0.75,
-      fontSize: 22, bold: true, color: 'A5B4FC', wrap: true,
-    })
+    // Left accent bar
+    s.addShape(prs.ShapeType.rect, { x: 0, y: 0, w: 0.07, h: 5.63, fill: { color }, line: { color, transparency: 100 } })
+    // Decorative glow circle top-right
+    s.addShape(prs.ShapeType.ellipse, { x: 8.0, y: -1.0, w: 3.2, h: 3.2, fill: { color, transparency: 88 }, line: { color, transparency: 100 } })
+
+    // Slide image (right panel) — fetch only for first 3 content slides to keep speed reasonable
+    let hasImg = false
+    if (sd.keywords && idx < 3) {
+      const img = await fetchImageData(sd.keywords)
+      if (img) {
+        s.addImage({ data: img, x: 5.9, y: 0.95, w: 3.9, h: 3.75 })
+        s.addShape(prs.ShapeType.rect, { x: 5.9, y: 0.95, w: 3.9, h: 3.75, fill: { color: '000000', transparency: 65 }, line: { color, transparency: 80, width: 0.5 } })
+        hasImg = true
+      }
+    }
+
+    const textW = hasImg ? 5.65 : 9.7
+
+    // Title
+    s.addText(sd.title || '', { x: 0.25, y: 0.2, w: textW, h: 0.78, fontSize: 22, bold: true, color: 'A5B4FC', wrap: true })
+    // Divider
+    s.addShape(prs.ShapeType.line, { x: 0.25, y: 1.05, w: textW, h: 0, line: { color, width: 0.75 } })
 
     if (sd.bullets?.length) {
-      const lines = sd.bullets.map(b => `  •  ${b}`).join('\n')
-      s.addText(lines, {
-        x: 0.5, y: 1.2, w: 9, h: 4.2,
-        fontSize: 16, color: 'CBD5E1',
-        lineSpacingMultiple: 1.6, valign: 'top', wrap: true,
+      s.addText(sd.bullets.map(b => `  •  ${b}`).join('\n'), {
+        x: 0.25, y: 1.2, w: textW, h: 4.1,
+        fontSize: 15, color: 'CBD5E1', lineSpacingMultiple: 1.6, valign: 'top', wrap: true,
       })
     }
 
-    s.addText(`${idx + 1} / ${(outline.slides || []).length}`, {
-      x: 8.5, y: 5.1, w: 1, h: 0.3,
-      fontSize: 10, color: '334155', align: 'right',
-    })
+    s.addText(`${idx + 1} / ${slides.length}`, { x: 8.5, y: 5.2, w: 1.2, h: 0.3, fontSize: 10, color: '334155', align: 'right' })
   }
+
   return prs
 }
 
@@ -469,11 +561,12 @@ Return ONLY valid JSON (no markdown fences):
 {
   "title": "presentation title",
   "subtitle": "optional one-line tagline",
+  "cover_keywords": "3 comma-separated English keywords for cover photo search (e.g. \"technology,innovation,data\")",
   "slides": [
-    { "title": "slide title", "bullets": ["point 1", "point 2", "point 3"] }
+    { "title": "slide title", "bullets": ["point 1", "point 2", "point 3"], "keywords": "2-3 English keywords for image" }
   ]
 }
-Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as input, presentation-appropriate tone.`,
+Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as input for title/subtitle/bullets, keywords must be English only, presentation-appropriate tone.`,
           },
           { role: 'user', content: fullContent },
         ],
@@ -493,7 +586,7 @@ Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as inpu
     try { outline = JSON.parse(jsonStr) }
     catch { return res.status(500).json({ error: '解析幻灯片内容失败，请重试' }) }
 
-    const prs = buildPPT(outline)
+    const prs = await buildPPT(outline)
     const buffer = await prs.write('nodebuffer')
 
     const safeName = (note.title || 'presentation').replace(/[^\w一-龥 \-]/g, '').trim().slice(0, 40) || 'presentation'

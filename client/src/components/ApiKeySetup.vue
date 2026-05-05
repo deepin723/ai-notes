@@ -45,7 +45,7 @@ const onSave = () => {
       <div class="rule" />
 
       <h2 class="form-title">配置 API Key</h2>
-      <p class="form-desc">填入你自己的 API Key，知识编译将使用你的账户额度。<br/>Key 只存储在本地浏览器，不会上传至任何服务器。</p>
+      <p class="form-desc">填入你自己的 API Key，知识编译将使用你的账户额度。<br/>保存后会加密同步至账号，换设备登录后自动还原。</p>
 
       <div class="field">
         <label>API Key</label>

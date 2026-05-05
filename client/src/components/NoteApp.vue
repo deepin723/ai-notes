@@ -113,6 +113,9 @@ const spaces         = ref<{ name: string; count: number }[]>([])
 const newSpaceName   = ref('')
 const showNewSpace   = ref(false)
 const newSpaceInputRef = ref<HTMLInputElement | null>(null)
+const renamingSpace  = ref<string | null>(null)
+const renameValue    = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
 
 const allSpaces = computed(() => {
   if (!spaces.value.find(s => s.name === currentSpace.value)) {
@@ -376,6 +379,31 @@ const createSpace = async () => {
   }
 }
 
+const startRename = (name: string) => {
+  renamingSpace.value = name
+  renameValue.value = name
+  nextTick(() => { renameInputRef.value?.select() })
+}
+
+const commitRename = async () => {
+  const oldName = renamingSpace.value
+  const newName = renameValue.value.trim()
+  renamingSpace.value = null
+  if (!newName || newName === oldName || !oldName) return
+  try {
+    await authFetch('/api/spaces/rename', {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({ oldName, newName }),
+    })
+    if (currentSpace.value === oldName) currentSpace.value = newName
+    await fetchSpaces()
+    showToast('空间已重命名')
+  } catch {
+    showToast('重命名失败', 'error')
+  }
+}
+
 // ── PPT Generation ────────────────────────────────────────────────────────
 const generatePPT = async () => {
   if (!currentNote.value || isGeneratingPPT.value) return
@@ -624,15 +652,32 @@ onUnmounted(() => {
       <!-- Space Switcher -->
       <div class="space-switcher">
         <div class="space-list">
-          <button
+          <div
             v-for="s in allSpaces" :key="s.name"
             class="space-item" :class="{ active: currentSpace === s.name }"
-            @click="switchSpace(s.name)"
           >
             <span class="space-dot" />
-            <span class="space-name">{{ s.name }}</span>
-            <span v-if="s.count" class="space-count">{{ s.count }}</span>
-          </button>
+            <template v-if="renamingSpace === s.name">
+              <input
+                ref="renameInputRef"
+                v-model="renameValue"
+                class="space-rename-input"
+                @blur="commitRename"
+                @keyup.enter="commitRename"
+                @keyup.escape="renamingSpace = null"
+                @click.stop
+              />
+            </template>
+            <template v-else>
+              <span class="space-name" @click="switchSpace(s.name)">{{ s.name }}</span>
+              <span v-if="s.count" class="space-count">{{ s.count }}</span>
+              <button class="space-edit-btn" title="重命名" @click.stop="startRename(s.name)">
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" width="10" height="10">
+                  <path d="M7.5 1.5l3 3L3 12H0V9L7.5 1.5z"/>
+                </svg>
+              </button>
+            </template>
+          </div>
         </div>
         <div v-if="showNewSpace" class="space-new-row">
           <input
@@ -2316,6 +2361,7 @@ onUnmounted(() => {
   transition: all 0.15s;
   text-align: left;
   font-family: inherit;
+  box-sizing: border-box;
 }
 .space-item:hover { background: rgba(255,255,255,0.04); color: var(--text-2); }
 .space-item.active { background: rgba(99,102,241,0.1); color: var(--text); }
@@ -2391,6 +2437,35 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .space-confirm-btn:hover { background: rgba(99,102,241,0.2); }
+
+.space-rename-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.space-edit-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.space-edit-btn:hover { color: var(--text-2); background: rgba(255,255,255,0.06); }
+.space-item:hover .space-edit-btn { display: flex; }
 
 /* ── btn-label (hidden on mobile) ── */
 .btn-label {
