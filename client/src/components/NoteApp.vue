@@ -3084,7 +3084,7 @@ onUnmounted(() => {
   width: 216px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
-  background: var(--bg-card);
+  background: transparent;
   overflow-y: auto;
   padding: 18px 12px;
   display: flex;
