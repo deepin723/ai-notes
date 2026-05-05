@@ -175,7 +175,7 @@ app.get('/api/notes', requireUser, (req, res) => {
 app.get('/api/notes/:id', requireUser, (req, res) => {
   const note = readNote(req.userId, req.params.id)
   if (!note) return res.status(404).json({ error: '笔记不存在' })
-  if (note.read === false) {
+  if (note.read !== true && note.date) {
     const { content, ...meta } = note
     writeNote(req.userId, { ...meta, read: true }, content)
     note.read = true
