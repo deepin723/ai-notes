@@ -304,7 +304,14 @@ async function runCursorAgent({ apiKey, prompt, model = 'claude-4.7-opus', timeo
         resolve(stdout.trim())
       }
     })
-    proc.on('error', reject)
+    proc.on('error', err => {
+      try { fs.rmSync(workspace, { recursive: true, force: true }) } catch {}
+      if (err.code === 'ENOENT') {
+        reject(new Error('Cursor CLI 未安装在服务器上（agent binary not found on PATH）。请确认 Docker 镜像已正确安装 cursor CLI。'))
+      } else {
+        reject(err)
+      }
+    })
   })
 }
 
