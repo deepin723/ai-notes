@@ -732,36 +732,7 @@ async function buildPPT(outline) {
   return prs
 }
 
-app.post('/api/ppt/:noteId', requireUser, async (req, res) => {
-  const apiKey = req.headers['x-api-key']
-  const baseUrl = (req.headers['x-base-url'] || 'https://bobdong.cn/v1').replace(/\/$/, '')
-  if (!apiKey) return res.status(401).json({ error: '请先配置你的 API Key' })
-
-  const note = readNote(req.userId, req.params.noteId)
-  if (!note) return res.status(404).json({ error: '笔记不存在' })
-
-  // Aggregate compiled wiki pages for richer PPT content
-  const allNotes = listNotes(req.userId)
-  const compiledPages = allNotes.filter(n => n.sourceId === note.id)
-  let fullContent = `# ${note.title}\n\n${note.content}`
-  for (const page of compiledPages) {
-    const detail = readNote(req.userId, page.id)
-    if (detail?.content) {
-      const label = TYPE_LABELS[page.type] || page.type
-      fullContent += `\n\n---\n## [${label}] ${page.title}\n\n${detail.content}`
-    }
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-5.4',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a presentation designer. Generate a slide deck outline from the given note.
+const PPT_SYSTEM_PROMPT = `You are a presentation designer. Generate a slide deck outline from the given note.
 Return ONLY valid JSON (no markdown fences):
 {
   "title": "presentation title",
@@ -771,8 +742,47 @@ Return ONLY valid JSON (no markdown fences):
     { "title": "slide title", "bullets": ["point 1", "point 2", "point 3"], "keywords": "2-3 English keywords for image" }
   ]
 }
-Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as input for title/subtitle/bullets, keywords must be English only, presentation-appropriate tone.`,
-          },
+Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as input for title/subtitle/bullets, keywords must be English only, presentation-appropriate tone.`
+
+function aggregateNoteForPPT(userId, note) {
+  const allNotes = listNotes(userId)
+  const compiledPages = allNotes.filter(n => n.sourceId === note.id)
+  let fullContent = `# ${note.title}\n\n${note.content}`
+  for (const page of compiledPages) {
+    const detail = readNote(userId, page.id)
+    if (detail?.content) {
+      const label = TYPE_LABELS[page.type] || page.type
+      fullContent += `\n\n---\n## [${label}] ${page.title}\n\n${detail.content}`
+    }
+  }
+  return fullContent
+}
+
+function sendPPTResponse(res, note, buffer) {
+  const safeName = (note.title || 'presentation').replace(/[^\w一-龥 \-]/g, '').trim().slice(0, 40) || 'presentation'
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}.pptx`)
+  res.send(buffer)
+}
+
+app.post('/api/ppt/:noteId', requireUser, async (req, res) => {
+  const apiKey = req.headers['x-api-key']
+  const baseUrl = (req.headers['x-base-url'] || 'https://bobdong.cn/v1').replace(/\/$/, '')
+  if (!apiKey) return res.status(401).json({ error: '请先配置你的 API Key' })
+
+  const note = readNote(req.userId, req.params.noteId)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+
+  const fullContent = aggregateNoteForPPT(req.userId, note)
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-5.4',
+        messages: [
+          { role: 'system', content: PPT_SYSTEM_PROMPT },
           { role: 'user', content: fullContent },
         ],
         max_tokens: 2000,
@@ -786,20 +796,48 @@ Rules: 5-8 slides, 3-5 concise bullets each (10-25 words), same language as inpu
     const raw = data.choices?.[0]?.message?.content?.trim()
     if (!raw) return res.status(500).json({ error: 'LLM 返回为空，请重试' })
 
-    const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
     let outline
-    try { outline = JSON.parse(jsonStr) }
+    try { outline = parseCompiledJson(raw) }
     catch { return res.status(500).json({ error: '解析幻灯片内容失败，请重试' }) }
 
     const prs = await buildPPT(outline)
     const buffer = await prs.write('nodebuffer')
-
-    const safeName = (note.title || 'presentation').replace(/[^\w一-龥 \-]/g, '').trim().slice(0, 40) || 'presentation'
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}.pptx`)
-    res.send(buffer)
+    sendPPTResponse(res, note, buffer)
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : '未知错误' })
+  }
+})
+
+// PPT generation via Cursor CLI (user-supplied Cursor API Key)
+app.post('/api/ppt-cursor/:noteId', requireUser, async (req, res) => {
+  const cursorKey = req.headers['x-cursor-key']
+  const model = req.headers['x-cursor-model'] || 'auto'
+  if (!cursorKey) return res.status(401).json({ error: '请先配置 Cursor API Key' })
+
+  const note = readNote(req.userId, req.params.noteId)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+
+  const fullContent = aggregateNoteForPPT(req.userId, note)
+  const prompt = `${PPT_SYSTEM_PROMPT}\n\n---\n\n${fullContent}`
+
+  try {
+    const raw = await runCursorAgent({ apiKey: cursorKey, prompt, model })
+    if (!raw) return res.status(500).json({ error: 'Cursor 返回为空' })
+
+    let outline
+    try { outline = parseCompiledJson(typeof raw === 'string' ? raw : JSON.stringify(raw)) }
+    catch {
+      console.error('[ppt-cursor] JSON parse failed:', String(raw).slice(0, 200))
+      return res.status(500).json({ error: '解析幻灯片内容失败，请重试' })
+    }
+
+    const prs = await buildPPT(outline)
+    const buffer = await prs.write('nodebuffer')
+    sendPPTResponse(res, note, buffer)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[ppt-cursor] error:', msg)
+    res.status(500).json({ error: msg })
   }
 })
 

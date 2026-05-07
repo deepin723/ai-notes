@@ -473,16 +473,27 @@ const commitRename = async () => {
 }
 
 // ── PPT Generation ────────────────────────────────────────────────────────
-const generatePPT = async () => {
+const generatePPT = async (provider: 'standard' | 'cursor' = 'standard') => {
   if (!currentNote.value || isGeneratingPPT.value) return
   isGeneratingPPT.value = true
-  showToast('正在生成 PPT，请稍候...', 'info')
+  const label = provider === 'cursor' ? 'Cursor' : '标准'
+  showToast(`正在用 ${label} 生成 PPT，请稍候...`, 'info')
   try {
     const token = await props.getToken()
-    const resp = await fetch(`/api/ppt/${currentNote.value.id}`, {
+    const endpoint = provider === 'cursor'
+      ? `/api/ppt-cursor/${currentNote.value.id}`
+      : `/api/ppt/${currentNote.value.id}`
+    const extraHeaders: Record<string, string> = provider === 'cursor'
+      ? {
+          'Content-Type': 'application/json',
+          'x-cursor-key': props.cursorKey,
+          'x-cursor-model': props.cursorModel || 'auto',
+        }
+      : headers() as Record<string, string>
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        ...headers(),
+        ...extraHeaders,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     })
@@ -1254,13 +1265,25 @@ onUnmounted(() => {
               <span class="btn-label">{{ currentNote.nextReviewAt ? '复习中' : '加入复习' }}</span>
             </button>
             <!-- PPT button (desktop only) -->
-            <button class="btn-ghost-sm btn-ppt-trigger" :disabled="isGeneratingPPT" @click="generatePPT">
+            <button class="btn-ghost-sm btn-ppt-trigger" :disabled="isGeneratingPPT" @click="generatePPT('standard')">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
                 <rect x="1" y="2" width="14" height="12" rx="2"/>
                 <path d="M5 6h3.5a1.5 1.5 0 0 1 0 3H5V6z"/>
                 <line x1="5" y1="11" x2="8" y2="11"/>
               </svg>
               <span class="btn-label">{{ isGeneratingPPT ? '生成中' : 'PPT' }}</span>
+            </button>
+            <!-- Cursor PPT button (shown only when Cursor Key configured) -->
+            <button
+              v-if="cursorKey"
+              class="btn-ghost-sm btn-ppt-trigger btn-ppt-cursor"
+              :disabled="isGeneratingPPT"
+              @click="generatePPT('cursor')"
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+                <path d="M8 1l1.5 4L14 7l-4.5 1.5L8 13l-1.5-4.5L2 7l4.5-1.5z"/>
+              </svg>
+              <span class="btn-label">{{ isGeneratingPPT ? '生成中' : 'Cursor PPT' }}</span>
             </button>
             <button class="btn-ghost-sm" :class="{ 'chat-active': chatOpen }" @click="chatOpen = !chatOpen">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -2234,6 +2257,16 @@ onUnmounted(() => {
 
 .btn-recompile.cursor { color: #FB923C; }
 .btn-recompile.cursor:hover { opacity: 0.8; }
+
+.btn-ghost-sm.btn-ppt-cursor {
+  border-color: rgba(251,146,60,0.4);
+  color: #FB923C;
+}
+.btn-ghost-sm.btn-ppt-cursor:hover {
+  border-color: rgba(251,146,60,0.6);
+  background: rgba(251,146,60,0.08);
+  color: #FDBA74;
+}
 
 .compiling {
   display: flex;
