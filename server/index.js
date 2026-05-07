@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url'
 import { clerkMiddleware, getAuth } from '@clerk/express'
 import pptxgen from 'pptxgenjs'
 import webpush from 'web-push'
+import { spawn } from 'child_process'
+import { tmpdir } from 'os'
 
 dotenv.config()
 
@@ -226,6 +228,86 @@ app.delete('/api/notes/:id', requireUser, (req, res) => {
   res.json({ ok: true })
 })
 
+// ── Compile helpers ──────────────────────────────────────────────────────────
+
+const COMPILE_SYSTEM_PROMPT = `You are a knowledge compilation engine. Analyze the given note and generate structured wiki pages.
+Return ONLY valid JSON (no markdown code blocks, no explanation). Include only types that are relevant to the note content:
+{
+  "entity":     { "title": "...", "content": "markdown content with [[wikilinks]] for key concepts", "links": ["linked title 1"] },
+  "concept":    { "title": "...", "content": "...", "links": [] },
+  "summary":    { "title": "...", "content": "...", "links": [] },
+  "synthesis":  { "title": "...", "content": "...", "links": [] },
+  "comparison": { "title": "...", "content": "use markdown table for comparisons", "links": [] },
+  "qa":         { "title": "...", "content": "use **Q:** ... **A:** ... format for each pair", "links": [] }
+}
+Rules:
+- Use [[double brackets]] for key terms and concepts that link internally
+- Write in the same language as the input note
+- Be concise and factual
+- Only include types that have meaningful content for this note`
+
+function parseCompiledJson(raw) {
+  const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  return JSON.parse(jsonStr)
+}
+
+async function saveCompiledPages(userId, note, pages) {
+  const now = new Date().toISOString()
+  const created = []
+  for (const type of NOTE_TYPES.filter(t => t !== 'raw')) {
+    const page = pages[type]
+    if (!page?.title || !page?.content) continue
+    const id = `note_${Date.now()}_${type}`
+    const meta = {
+      id, type, title: page.title,
+      tags: [], links: page.links || [],
+      sourceId: note.id,
+      space: note.space || '默认',
+      created: now, updated: now,
+    }
+    writeNote(userId, meta, page.content)
+    created.push({ id, type, title: page.title })
+    await new Promise(r => setTimeout(r, 5))
+  }
+  const { content: rawContent, ...rawMeta } = note
+  writeNote(userId, { ...rawMeta, compiledAt: now, updated: now }, rawContent)
+  return created
+}
+
+// Spawn Cursor CLI (`agent`) as subprocess; returns the LLM's final text
+async function runCursorAgent({ apiKey, prompt, model = 'claude-4.7-opus', timeoutMs = 120_000 }) {
+  const workspace = fs.mkdtempSync(path.join(tmpdir(), 'vki-cursor-'))
+  return new Promise((resolve, reject) => {
+    const proc = spawn('agent', [
+      '-p',
+      '--output-format', 'json',
+      '--force',
+      '--workspace', workspace,
+      '--model', model,
+      prompt,
+    ], {
+      env: { ...process.env, CURSOR_API_KEY: apiKey },
+      timeout: timeoutMs,
+    })
+    let stdout = '', stderr = ''
+    proc.stdout.on('data', d => stdout += d.toString())
+    proc.stderr.on('data', d => stderr += d.toString())
+    proc.on('close', code => {
+      try { fs.rmSync(workspace, { recursive: true, force: true }) } catch {}
+      if (code !== 0) return reject(new Error(stderr.slice(0, 500) || `agent exited with code ${code}`))
+      try {
+        const wrapper = JSON.parse(stdout)
+        // cursor-agent json wraps output as { result: "...", ... }
+        resolve(wrapper.result ?? wrapper.message?.content?.[0]?.text ?? wrapper)
+      } catch {
+        // If parsing fails, try treating stdout as raw LLM response
+        resolve(stdout.trim())
+      }
+    })
+    proc.on('error', reject)
+  })
+}
+
 // Compile raw note → wiki pages via LLM
 app.post('/api/compile/:id', requireUser, async (req, res) => {
   const apiKey = req.headers['x-api-key']
@@ -249,24 +331,7 @@ app.post('/api/compile/:id', requireUser, async (req, res) => {
       body: JSON.stringify({
         model: 'gpt-5.4',
         messages: [
-          {
-            role: 'system',
-            content: `You are a knowledge compilation engine. Analyze the given note and generate structured wiki pages.
-Return ONLY valid JSON (no markdown code blocks, no explanation). Include only types that are relevant to the note content:
-{
-  "entity":     { "title": "...", "content": "markdown content with [[wikilinks]] for key concepts", "links": ["linked title 1"] },
-  "concept":    { "title": "...", "content": "...", "links": [] },
-  "summary":    { "title": "...", "content": "...", "links": [] },
-  "synthesis":  { "title": "...", "content": "...", "links": [] },
-  "comparison": { "title": "...", "content": "use markdown table for comparisons", "links": [] },
-  "qa":         { "title": "...", "content": "use **Q:** ... **A:** ... format for each pair", "links": [] }
-}
-Rules:
-- Use [[double brackets]] for key terms and concepts that link internally
-- Write in the same language as the input note
-- Be concise and factual
-- Only include types that have meaningful content for this note`,
-          },
+          { role: 'system', content: COMPILE_SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
         max_tokens: 3000,
@@ -279,45 +344,51 @@ Rules:
     const raw = data.choices?.[0]?.message?.content?.trim()
     if (!raw) return res.status(500).json({ error: 'LLM 返回为空，请重试' })
 
-    // Strip markdown code fences if present
-    const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
     let pages
-    try {
-      pages = JSON.parse(jsonStr)
-    } catch {
+    try { pages = parseCompiledJson(raw) }
+    catch {
       console.error('[compile] JSON parse failed:', raw.slice(0, 200))
       return res.status(500).json({ error: '解析 LLM 输出失败，请重试' })
     }
 
-    const now = new Date().toISOString()
-    const created = []
-
-    for (const type of NOTE_TYPES.filter(t => t !== 'raw')) {
-      const page = pages[type]
-      if (!page?.title || !page?.content) continue
-
-      const id = `note_${Date.now()}_${type}`
-      const meta = {
-        id, type, title: page.title,
-        tags: [], links: page.links || [],
-        sourceId: note.id,
-        space: note.space || '默认',
-        created: now, updated: now,
-      }
-      writeNote(req.userId, meta, page.content)
-      created.push({ id, type, title: page.title })
-      // Small delay to ensure unique timestamps
-      await new Promise(r => setTimeout(r, 5))
-    }
-
-    // Mark original note as compiled
-    const { content: rawContent, ...rawMeta } = note
-    writeNote(req.userId, { ...rawMeta, compiledAt: now, updated: now }, rawContent)
-
+    const created = await saveCompiledPages(req.userId, note, pages)
     res.json({ pages: created })
   } catch (err) {
     const message = err instanceof Error ? err.message : '未知错误'
     console.error('[compile] error:', message)
+    res.status(500).json({ error: message })
+  }
+})
+
+// Compile raw note → wiki pages via Cursor CLI (user-supplied Cursor API Key)
+app.post('/api/compile-cursor/:id', requireUser, async (req, res) => {
+  const cursorKey = req.headers['x-cursor-key']
+  const model = req.headers['x-cursor-model'] || 'claude-4.7-opus'
+
+  if (!cursorKey) return res.status(401).json({ error: '请先配置 Cursor API Key' })
+
+  const note = readNote(req.userId, req.params.id)
+  if (!note) return res.status(404).json({ error: '笔记不存在' })
+  if (note.type !== 'raw') return res.status(400).json({ error: '只能编译原始笔记' })
+
+  const prompt = `${COMPILE_SYSTEM_PROMPT}\n\n---\n\nTitle: ${note.title}\n\n${note.content}`
+
+  try {
+    const raw = await runCursorAgent({ apiKey: cursorKey, prompt, model })
+    if (!raw) return res.status(500).json({ error: 'Cursor 返回为空' })
+
+    let pages
+    try { pages = parseCompiledJson(typeof raw === 'string' ? raw : JSON.stringify(raw)) }
+    catch {
+      console.error('[compile-cursor] JSON parse failed:', String(raw).slice(0, 200))
+      return res.status(500).json({ error: '解析 Cursor 输出失败，请重试' })
+    }
+
+    const created = await saveCompiledPages(req.userId, note, pages)
+    res.json({ pages: created })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '未知错误'
+    console.error('[compile-cursor] error:', message)
     res.status(500).json({ error: message })
   }
 })
@@ -470,13 +541,25 @@ app.put('/api/spaces/rename', requireUser, (req, res) => {
 // User settings (API key sync across devices)
 app.get('/api/user-settings', requireUser, (req, res) => {
   const s = readUserSettings(req.userId)
-  res.json({ apiKey: s.apiKey || '', baseUrl: s.baseUrl || '', synced: !!s.apiKey })
+  res.json({
+    apiKey: s.apiKey || '',
+    baseUrl: s.baseUrl || '',
+    cursorKey: s.cursorKey || '',
+    cursorModel: s.cursorModel || '',
+    synced: !!s.apiKey,
+  })
 })
 
 app.put('/api/user-settings', requireUser, (req, res) => {
-  const { apiKey, baseUrl } = req.body
+  const { apiKey, baseUrl, cursorKey, cursorModel } = req.body
   const cur = readUserSettings(req.userId)
-  writeUserSettings(req.userId, { ...cur, ...(apiKey !== undefined && { apiKey }), ...(baseUrl !== undefined && { baseUrl }) })
+  writeUserSettings(req.userId, {
+    ...cur,
+    ...(apiKey !== undefined && { apiKey }),
+    ...(baseUrl !== undefined && { baseUrl }),
+    ...(cursorKey !== undefined && { cursorKey }),
+    ...(cursorModel !== undefined && { cursorModel }),
+  })
   res.json({ ok: true })
 })
 

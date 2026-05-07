@@ -4,7 +4,7 @@ import { marked } from 'marked'
 import { useUser, useClerk } from '@clerk/vue'
 import GraphView from './GraphView.vue'
 
-const props = defineProps<{ apiKey: string; baseUrl: string; getToken: () => Promise<string | null> }>()
+const props = defineProps<{ apiKey: string; baseUrl: string; cursorKey: string; cursorModel: string; getToken: () => Promise<string | null> }>()
 const emit = defineEmits<{ settings: [] }>()
 
 const { user } = useUser()
@@ -354,7 +354,7 @@ const deleteNote = async (id: string) => {
   }
 }
 
-const compileNote = async () => {
+const compileNote = async (provider: 'standard' | 'cursor' = 'standard') => {
   if (!currentNote.value) return
   isCompiling.value = true
   compileMsgIdx.value = 0
@@ -373,9 +373,19 @@ const compileNote = async () => {
   }, 2500)
 
   try {
-    const res = await authFetch(`/api/compile/${currentNote.value.id}`, {
+    const endpoint = provider === 'cursor'
+      ? `/api/compile-cursor/${currentNote.value.id}`
+      : `/api/compile/${currentNote.value.id}`
+    const extraHeaders: Record<string, string> = provider === 'cursor'
+      ? {
+          'Content-Type': 'application/json',
+          'x-cursor-key': props.cursorKey,
+          'x-cursor-model': props.cursorModel || 'claude-4.7-opus',
+        }
+      : headers() as Record<string, string>
+    const res = await authFetch(endpoint, {
       method: 'POST',
-      headers: headers(),
+      headers: extraHeaders,
     })
     const data = await res.json()
     clearInterval(compileProgressTimer!)
@@ -1318,16 +1328,26 @@ onUnmounted(() => {
                 <polyline points="2,8 6,12 14,4"/>
               </svg>
               上次编译：{{ new Date(currentNote.compiledAt).toLocaleString('zh-CN') }}
-              <button class="btn-recompile" @click="compileNote">重新编译</button>
+              <button class="btn-recompile" @click="compileNote('standard')">标准重编</button>
+              <button v-if="cursorKey" class="btn-recompile cursor" @click="compileNote('cursor')">用 Cursor 重编</button>
             </div>
 
-            <!-- Compile button -->
-            <button v-else-if="!isCompiling" class="btn-compile" @click="compileNote">
-              <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
-                <path d="M8 1l1.5 4L14 7l-4.5 1.5L8 13l-1.5-4.5L2 7l4.5-1.5z"/>
-              </svg>
-              编译为 Wiki
-            </button>
+            <!-- Compile buttons -->
+            <div v-else-if="!isCompiling" class="compile-buttons">
+              <button v-if="cursorKey" class="btn-compile btn-compile-cursor" @click="compileNote('cursor')">
+                <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
+                  <path d="M8 1l1.5 4L14 7l-4.5 1.5L8 13l-1.5-4.5L2 7l4.5-1.5z"/>
+                </svg>
+                用 Cursor 编译
+                <span class="btn-compile-model">{{ cursorModel }}</span>
+              </button>
+              <button class="btn-compile" :class="{ secondary: !!cursorKey }" @click="compileNote('standard')">
+                <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
+                  <path d="M8 1l1.5 4L14 7l-4.5 1.5L8 13l-1.5-4.5L2 7l4.5-1.5z"/>
+                </svg>
+                {{ cursorKey ? '标准编译' : '编译为 Wiki' }}
+              </button>
+            </div>
 
             <!-- Compiling state with progress bar -->
             <div v-if="isCompiling" class="compiling">
@@ -2167,6 +2187,8 @@ onUnmounted(() => {
 /* Compile section */
 .compile-section { display: flex; flex-direction: column; gap: 10px; }
 
+.compile-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+
 .btn-compile {
   display: inline-flex;
   align-items: center;
@@ -2185,6 +2207,33 @@ onUnmounted(() => {
   font-family: inherit;
 }
 .btn-compile:hover { opacity: 0.88; }
+
+.btn-compile.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  box-shadow: none;
+}
+.btn-compile.secondary:hover { border-color: rgba(99,102,241,0.4); color: var(--text); opacity: 1; }
+
+.btn-compile-cursor {
+  background: linear-gradient(135deg, #F59E0B, #EA580C);
+  box-shadow: 0 3px 12px rgba(234,88,12,0.3);
+}
+.btn-compile-cursor:hover { opacity: 0.9; }
+
+.btn-compile-model {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 7px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 99px;
+  margin-left: 2px;
+  letter-spacing: 0.2px;
+}
+
+.btn-recompile.cursor { color: #FB923C; }
+.btn-recompile.cursor:hover { opacity: 0.8; }
 
 .compiling {
   display: flex;

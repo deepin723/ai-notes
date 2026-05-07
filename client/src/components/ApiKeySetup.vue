@@ -1,17 +1,40 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const props = defineProps<{ initialKey: string; initialUrl: string }>()
-const emit = defineEmits<{ save: [key: string, url: string] }>()
+const props = defineProps<{
+  initialKey: string
+  initialUrl: string
+  initialCursorKey: string
+  initialCursorModel: string
+}>()
+
+const emit = defineEmits<{
+  save: [payload: { apiKey: string; baseUrl: string; cursorKey: string; cursorModel: string }]
+}>()
 
 const key = ref(props.initialKey)
 const url = ref(props.initialUrl || 'https://bobdong.cn/v1')
+const cKey = ref(props.initialCursorKey || '')
+const cModel = ref(props.initialCursorModel || 'claude-4.7-opus')
+const showCursor = ref(!!props.initialCursorKey)
 const error = ref('')
+
+const CURSOR_MODELS = [
+  { id: 'claude-4.7-opus', label: 'Claude 4.7 Opus（最强，慢）' },
+  { id: 'claude-4.6-sonnet', label: 'Claude 4.6 Sonnet（平衡）' },
+  { id: 'gpt-5.5', label: 'GPT-5.5（快）' },
+  { id: 'composer-2', label: 'Composer 2（编程优化）' },
+]
 
 const onSave = () => {
   if (!key.value.trim()) { error.value = '请输入 API Key'; return }
   error.value = ''
-  emit('save', key.value.trim(), url.value.trim() || 'https://bobdong.cn/v1')
+  emit('save', {
+    apiKey: key.value.trim(),
+    baseUrl: url.value.trim() || 'https://bobdong.cn/v1',
+    cursorKey: cKey.value.trim(),
+    cursorModel: cModel.value,
+  })
 }
 </script>
 
@@ -57,11 +80,33 @@ const onSave = () => {
         <input v-model="url" type="text" placeholder="https://bobdong.cn/v1" />
       </div>
 
+      <div class="cursor-section">
+        <button class="cursor-toggle" @click="showCursor = !showCursor" type="button">
+          <span class="cursor-chevron" :class="{ open: showCursor }">▸</span>
+          Cursor API Key <em>（可选，用于高质量编译）</em>
+        </button>
+        <div v-if="showCursor" class="cursor-fields">
+          <div class="field">
+            <label>Cursor Key</label>
+            <input v-model="cKey" type="password" placeholder="key_..." />
+          </div>
+          <div class="field">
+            <label>Cursor 模型</label>
+            <select v-model="cModel" class="select-input">
+              <option v-for="m in CURSOR_MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+            </select>
+          </div>
+          <p class="cursor-hint">
+            有 Cursor Key 后，编译按钮会多一个「用 Cursor 编译」选项，用你的 Cursor 额度跑。
+          </p>
+        </div>
+      </div>
+
       <p v-if="error" class="err">{{ error }}</p>
 
       <button class="btn" @click="onSave">开始使用</button>
 
-      <p class="foot">支持 OpenAI 兼容接口 · 编译模型 gpt5.4</p>
+      <p class="foot">支持 OpenAI 兼容接口 · Cursor CLI（可选）</p>
     </div>
   </div>
 </template>
@@ -82,7 +127,7 @@ const onSave = () => {
   border-radius: 20px;
   padding: 40px;
   width: 100%;
-  max-width: 420px;
+  max-width: 440px;
   box-shadow: 0 32px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04);
 }
 
@@ -100,7 +145,7 @@ const onSave = () => {
 .field label { display: block; font-size: 12px; color: var(--text-2); margin-bottom: 6px; letter-spacing: 0.3px; text-transform: uppercase; }
 .field label em { text-transform: none; font-style: normal; color: var(--text-3); font-size: 11px; }
 
-.field input {
+.field input, .select-input {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -111,9 +156,55 @@ const onSave = () => {
   outline: none;
   transition: border-color 0.2s;
   box-sizing: border-box;
+  font-family: inherit;
 }
-.field input:focus { border-color: var(--accent); }
+.field input:focus, .select-input:focus { border-color: var(--accent); }
 .field input::placeholder { color: var(--text-3); }
+
+.cursor-section {
+  margin: 8px 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cursor-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.cursor-toggle:hover { color: var(--text); }
+.cursor-toggle em { font-style: normal; color: var(--text-3); font-size: 11px; }
+
+.cursor-chevron {
+  display: inline-block;
+  transition: transform 0.2s;
+  color: var(--text-3);
+  font-size: 10px;
+}
+.cursor-chevron.open { transform: rotate(90deg); color: var(--accent-lt); }
+
+.cursor-fields {
+  padding: 8px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.cursor-fields .field:last-of-type { margin-bottom: 8px; }
+
+.cursor-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.6;
+  margin-top: 6px;
+}
 
 .err { font-size: 13px; color: #F87171; margin-bottom: 12px; }
 
