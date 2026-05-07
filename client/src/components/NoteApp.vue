@@ -3038,7 +3038,6 @@ onUnmounted(() => {
     gap: 10px;
   }
 
-  .viewer-body { padding: 16px 16px 40px; }
   .viewer-title { font-size: 20px; }
 
   .editor-header { padding: 12px 16px; }
@@ -3077,10 +3076,32 @@ onUnmounted(() => {
   .review-rating-btns { gap: 8px; }
   .review-btn { padding: 10px 16px; min-width: 72px; }
 
-  /* Right panel: hide on mobile */
+  /* ── Viewer on mobile: let .main scroll naturally ── */
   .viewer-aside { display: none; }
-  .viewer-content-wrap { overflow-y: auto; }
-  .viewer-body { overflow-y: visible; padding: 16px 16px 24px; }
+
+  .viewer-content-wrap {
+    display: block;
+    flex: initial;
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .viewer-body {
+    display: block;
+    flex: initial;
+    overflow: visible;
+    padding: 16px 16px 40px;
+    max-width: none;
+  }
+
+  /* When chat panel is open, content needs its own scroll to make room for the 260px chat */
+  .viewer-chat-mode .viewer-content-wrap {
+    display: block;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    flex: 1;
+    min-height: 0;
+  }
 }
 
 /* ── Nav Badge ── */
