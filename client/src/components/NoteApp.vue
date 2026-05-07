@@ -3008,6 +3008,16 @@ onUnmounted(() => {
   .main {
     min-width: 0;
     width: 100%;
+    display: block;                         /* Override desktop flex-column so natural block scroll works */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;      /* Momentum scroll on iOS */
+  }
+
+  /* When chat is open, restore flex column so the 260px chat panel can dock to bottom */
+  .main.viewer-chat-mode {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   /* Viewer header: compact icon-only buttons */
