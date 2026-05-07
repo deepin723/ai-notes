@@ -9,7 +9,17 @@ const { isSignedIn, getToken } = useAuth()
 const apiKey = ref(localStorage.getItem('vki_api_key') || '')
 const baseUrl = ref(localStorage.getItem('vki_base_url') || 'https://bobdong.cn/v1')
 const cursorKey = ref(localStorage.getItem('vki_cursor_key') || '')
-const cursorModel = ref(localStorage.getItem('vki_cursor_model') || 'claude-4.7-opus')
+
+const VALID_CURSOR_MODELS = new Set([
+  'auto', 'composer-2', 'composer-2-fast', 'composer-1.5',
+  'gpt-5.2', 'gpt-5.3-codex', 'gpt-5.3-codex-fast',
+  'gpt-5.3-codex-low', 'gpt-5.3-codex-low-fast',
+  'gpt-5.3-codex-high', 'gpt-5.3-codex-high-fast',
+  'gpt-5.3-codex-xhigh', 'gpt-5.3-codex-xhigh-fast',
+])
+const storedModel = localStorage.getItem('vki_cursor_model') || ''
+const cursorModel = ref(VALID_CURSOR_MODELS.has(storedModel) ? storedModel : 'auto')
+if (cursorModel.value !== storedModel) localStorage.setItem('vki_cursor_model', cursorModel.value)
 const showSetup = ref(!apiKey.value)
 
 // Auto-load settings from server when signed in (cross-device sync)

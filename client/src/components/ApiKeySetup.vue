@@ -15,15 +15,18 @@ const emit = defineEmits<{
 const key = ref(props.initialKey)
 const url = ref(props.initialUrl || 'https://bobdong.cn/v1')
 const cKey = ref(props.initialCursorKey || '')
-const cModel = ref(props.initialCursorModel || 'claude-4.7-opus')
+const cModel = ref(props.initialCursorModel || 'auto')
 const showCursor = ref(!!props.initialCursorKey)
 const error = ref('')
 
 const CURSOR_MODELS = [
-  { id: 'claude-4.7-opus', label: 'Claude 4.7 Opus（最强，慢）' },
-  { id: 'claude-4.6-sonnet', label: 'Claude 4.6 Sonnet（平衡）' },
-  { id: 'gpt-5.5', label: 'GPT-5.5（快）' },
-  { id: 'composer-2', label: 'Composer 2（编程优化）' },
+  { id: 'auto', label: 'auto（推荐，Cursor 自动挑选）' },
+  { id: 'gpt-5.3-codex-high', label: 'gpt-5.3-codex-high（强推理）' },
+  { id: 'gpt-5.3-codex', label: 'gpt-5.3-codex（平衡）' },
+  { id: 'gpt-5.3-codex-fast', label: 'gpt-5.3-codex-fast（快速）' },
+  { id: 'gpt-5.2', label: 'gpt-5.2（通用）' },
+  { id: 'composer-2', label: 'composer-2（编辑优化）' },
+  { id: 'composer-2-fast', label: 'composer-2-fast（最快）' },
 ]
 
 const onSave = () => {

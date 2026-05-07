@@ -275,7 +275,7 @@ async function saveCompiledPages(userId, note, pages) {
 }
 
 // Spawn Cursor CLI (`agent`) as subprocess; returns the LLM's final text
-async function runCursorAgent({ apiKey, prompt, model = 'claude-4.7-opus', timeoutMs = 120_000 }) {
+async function runCursorAgent({ apiKey, prompt, model = 'auto', timeoutMs = 120_000 }) {
   const workspace = fs.mkdtempSync(path.join(tmpdir(), 'vki-cursor-'))
   return new Promise((resolve, reject) => {
     const proc = spawn('agent', [
@@ -370,7 +370,7 @@ app.post('/api/compile/:id', requireUser, async (req, res) => {
 // Compile raw note → wiki pages via Cursor CLI (user-supplied Cursor API Key)
 app.post('/api/compile-cursor/:id', requireUser, async (req, res) => {
   const cursorKey = req.headers['x-cursor-key']
-  const model = req.headers['x-cursor-model'] || 'claude-4.7-opus'
+  const model = req.headers['x-cursor-model'] || 'auto'
 
   if (!cursorKey) return res.status(401).json({ error: '请先配置 Cursor API Key' })
 

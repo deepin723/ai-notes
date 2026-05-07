@@ -380,7 +380,7 @@ const compileNote = async (provider: 'standard' | 'cursor' = 'standard') => {
       ? {
           'Content-Type': 'application/json',
           'x-cursor-key': props.cursorKey,
-          'x-cursor-model': props.cursorModel || 'claude-4.7-opus',
+          'x-cursor-model': props.cursorModel || 'auto',
         }
       : headers() as Record<string, string>
     const res = await authFetch(endpoint, {
