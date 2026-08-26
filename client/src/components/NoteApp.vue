@@ -658,7 +658,9 @@ const exportShareImage = async () => {
     await document.fonts?.ready
     const node = shareCardRef.value
     const height = node.scrollHeight
-    const pixelRatio = Math.max(1, Math.min(2, 28000 / Math.max(height, 1)))
+    // Chromium commonly caps a canvas dimension at 16,384px. Scale down long
+    // notes instead of silently clipping their footer at that boundary.
+    const pixelRatio = Math.min(2, 15000 / Math.max(height, 1))
     const dataUrl = await toPng(node, {
       cacheBust: true,
       pixelRatio,
