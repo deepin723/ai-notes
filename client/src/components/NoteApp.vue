@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
+import { toPng } from 'html-to-image'
 import { useUser, useClerk } from '@clerk/vue'
 import GraphView from './GraphView.vue'
 
@@ -127,6 +128,19 @@ const allSpaces = computed(() => spaces.value)
 
 // ── Copy State ────────────────────────────────────────────────────────────
 const copiedNote = ref(false)
+
+// ── Long-image sharing ───────────────────────────────────────────────────
+type SharePaper = 'ivory' | 'ruled' | 'kraft' | 'midnight'
+const showShare = ref(false)
+const sharePaper = ref<SharePaper>('ivory')
+const shareCardRef = ref<HTMLElement | null>(null)
+const isExportingShare = ref(false)
+const sharePapers: { id: SharePaper; name: string; hint: string }[] = [
+  { id: 'ivory', name: '暖白信笺', hint: '柔和纸纹' },
+  { id: 'ruled', name: '横线稿纸', hint: '清晰耐读' },
+  { id: 'kraft', name: '牛皮纸', hint: '复古温暖' },
+  { id: 'midnight', name: '夜色手札', hint: '深色质感' },
+]
 
 // ── PPT State ─────────────────────────────────────────────────────────────
 const isGeneratingPPT = ref(false)
@@ -628,6 +642,45 @@ const copyNoteContent = async () => {
   }
 }
 
+const openShare = async () => {
+  showShare.value = true
+  await nextTick()
+}
+
+const closeShare = () => {
+  if (!isExportingShare.value) showShare.value = false
+}
+
+const exportShareImage = async () => {
+  if (!currentNote.value || !shareCardRef.value || isExportingShare.value) return
+  isExportingShare.value = true
+  try {
+    await document.fonts?.ready
+    const node = shareCardRef.value
+    const height = node.scrollHeight
+    const pixelRatio = Math.max(1, Math.min(2, 28000 / Math.max(height, 1)))
+    const dataUrl = await toPng(node, {
+      cacheBust: true,
+      pixelRatio,
+      width: node.scrollWidth,
+      height,
+      canvasWidth: node.scrollWidth * pixelRatio,
+      canvasHeight: height * pixelRatio,
+    })
+    const link = document.createElement('a')
+    const safeTitle = currentNote.value.title.replace(/[\\/:*?"<>|]/g, '-').slice(0, 48)
+    link.download = `${safeTitle || 'AI Note'}-长图.png`
+    link.href = dataUrl
+    link.click()
+    showToast('长图已生成并下载')
+  } catch (error) {
+    console.error('Share image export failed:', error)
+    showToast('长图生成失败，请稍后重试', 'error')
+  } finally {
+    isExportingShare.value = false
+  }
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 const sendChat = async () => {
   if (!chatInput.value.trim() || isChatting.value || !currentNote.value) return
@@ -753,6 +806,7 @@ const handleGlobalKeydown = (e: KeyboardEvent) => {
     return
   }
   if (e.key === 'Escape') {
+    if (showShare.value) { closeShare(); return }
     if (view.value === 'editor') { view.value = 'list'; resetEditor() }
     else if (view.value === 'viewer') { view.value = 'list' }
   }
@@ -1241,6 +1295,13 @@ onUnmounted(() => {
           </div>
 
           <div class="viewer-actions">
+            <button class="btn-ghost-sm btn-share-trigger" @click="openShare">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" width="13" height="13">
+                <circle cx="12.5" cy="3.5" r="2"/><circle cx="3.5" cy="8" r="2"/><circle cx="12.5" cy="12.5" r="2"/>
+                <path d="M5.3 7.1l5.4-2.7M5.3 8.9l5.4 2.7"/>
+              </svg>
+              <span class="btn-label">分享</span>
+            </button>
             <!-- Copy button -->
             <button class="btn-ghost-sm" :class="{ copied: copiedNote }" @click="copyNoteContent">
               <svg v-if="!copiedNote" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13">
@@ -1500,6 +1561,80 @@ onUnmounted(() => {
 
     </main>
   </div>
+
+  <Teleport to="body">
+    <div v-if="showShare && currentNote" class="share-overlay" @mousedown.self="closeShare">
+      <section class="share-dialog" role="dialog" aria-modal="true" aria-label="分享为长图">
+        <header class="share-dialog-header">
+          <div>
+            <span class="share-kicker">SHARE AS A STORY</span>
+            <h2>把笔记装进一张长图</h2>
+            <p>选择纸张质感，正文会按完整长度连续排版。</p>
+          </div>
+          <button class="share-close" aria-label="关闭" @click="closeShare">×</button>
+        </header>
+
+        <div class="share-workspace">
+          <aside class="paper-picker">
+            <span class="paper-picker-label">纸张质感</span>
+            <button
+              v-for="paper in sharePapers"
+              :key="paper.id"
+              class="paper-option"
+              :class="[`paper-option--${paper.id}`, { active: sharePaper === paper.id }]"
+              @click="sharePaper = paper.id"
+            >
+              <span class="paper-swatch" />
+              <span><strong>{{ paper.name }}</strong><small>{{ paper.hint }}</small></span>
+              <svg v-if="sharePaper === paper.id" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,8 6.5,11.5 13,4.5"/></svg>
+            </button>
+
+            <div class="share-tip">
+              <span>✦</span>
+              <p>图片会包含标题、标签、日期与完整正文，适合直接发朋友圈或聊天。</p>
+            </div>
+          </aside>
+
+          <div class="share-preview-shell">
+            <div class="share-preview-scroll">
+              <article ref="shareCardRef" class="share-card" :class="`share-card--${sharePaper}`">
+                <div class="share-card-inner">
+                  <div class="share-brand-row">
+                    <span class="share-brand-mark">A</span>
+                    <span>AI NOTE</span>
+                    <i />
+                    <span>{{ TYPE_LABELS[currentNote.type] }}</span>
+                  </div>
+                  <h1>{{ currentNote.title }}</h1>
+                  <div class="share-card-meta">
+                    <span>{{ new Date(currentNote.updated).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) }}</span>
+                    <span v-for="tag in currentNote.tags?.slice(0, 4)" :key="tag"># {{ tag }}</span>
+                  </div>
+                  <div class="share-rule"><span>✦</span></div>
+                  <div class="share-markdown" v-html="renderMarkdown(currentNote.content)" />
+                  <footer class="share-card-footer">
+                    <span class="share-footer-line" />
+                    <span>Made with AI Note</span>
+                    <span class="share-footer-dot">✦</span>
+                  </footer>
+                </div>
+              </article>
+            </div>
+            <span class="share-preview-caption">长图预览 · 可滚动查看完整内容</span>
+          </div>
+        </div>
+
+        <footer class="share-dialog-footer">
+          <span>PNG · 自动适配正文长度</span>
+          <button class="share-download" :disabled="isExportingShare" @click="exportShareImage">
+            <svg v-if="!isExportingShare" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 2v9m0 0l-3.5-3.5M9 11l3.5-3.5"/><path d="M3 13v2h12v-2"/></svg>
+            <span v-else class="share-spinner" />
+            {{ isExportingShare ? '正在生成长图…' : '下载长图' }}
+          </button>
+        </footer>
+      </section>
+    </div>
+  </Teleport>
 
   <!-- Toast Notifications -->
   <Teleport to="body">
@@ -2179,6 +2314,113 @@ onUnmounted(() => {
 }
 .btn-ghost-sm:hover { border-color: rgba(99,102,241,0.35); color: var(--text); }
 .btn-ghost-sm.copied { border-color: rgba(52,211,153,0.35); color: #34D399; }
+.btn-share-trigger { color: #A5B4FC; border-color: rgba(129,140,248,0.28); background: rgba(99,102,241,0.06); }
+.btn-share-trigger:hover { background: rgba(99,102,241,0.13); }
+
+/* ── Long image share studio ── */
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 6, 12, 0.78);
+  backdrop-filter: blur(14px) saturate(0.8);
+  animation: share-fade 0.18s ease-out;
+}
+.share-dialog {
+  width: min(1100px, 96vw);
+  height: min(820px, 92vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #E8EAF4;
+  background: #10131C;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 18px;
+  box-shadow: 0 36px 100px rgba(0,0,0,0.56), 0 0 0 1px rgba(255,255,255,0.025) inset;
+  animation: share-rise 0.24s cubic-bezier(.2,.8,.2,1);
+}
+.share-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid rgba(148,163,184,0.12);
+  background: radial-gradient(circle at 18% 0%, rgba(99,102,241,0.14), transparent 34%);
+}
+.share-kicker { color: #818CF8; font-size: 9px; font-weight: 800; letter-spacing: 0.22em; }
+.share-dialog-header h2 { margin-top: 5px; font: 650 21px/1.3 Georgia, 'Noto Serif SC', serif; letter-spacing: 0.01em; }
+.share-dialog-header p { margin-top: 5px; color: #747D91; font-size: 12px; }
+.share-close {
+  width: 32px; height: 32px; border: 1px solid rgba(148,163,184,0.15); border-radius: 50%;
+  background: rgba(255,255,255,0.025); color: #778095; font: 300 23px/1 sans-serif; cursor: pointer;
+}
+.share-close:hover { color: #fff; background: rgba(255,255,255,0.07); }
+.share-workspace { display: grid; grid-template-columns: 210px minmax(0, 1fr); flex: 1; min-height: 0; }
+.paper-picker { padding: 22px 18px; border-right: 1px solid rgba(148,163,184,0.1); background: #0D1018; }
+.paper-picker-label { display: block; margin: 0 8px 10px; color: #596277; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; }
+.paper-option {
+  width: 100%; display: grid; grid-template-columns: 34px 1fr 15px; align-items: center; gap: 10px;
+  padding: 9px; margin-bottom: 5px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: #AAB1C0; text-align: left; cursor: pointer; font-family: inherit;
+}
+.paper-option:hover { background: rgba(255,255,255,0.035); }
+.paper-option.active { color: #E9EAF3; border-color: rgba(129,140,248,0.24); background: rgba(99,102,241,0.09); }
+.paper-option svg { width: 15px; color: #818CF8; }
+.paper-option strong, .paper-option small { display: block; }
+.paper-option strong { font-size: 12px; font-weight: 600; }
+.paper-option small { margin-top: 2px; color: #596277; font-size: 10px; }
+.paper-swatch { width: 34px; height: 34px; border-radius: 7px; box-shadow: 0 2px 7px rgba(0,0,0,.25), inset 0 0 0 1px rgba(0,0,0,.08); }
+.paper-option--ivory .paper-swatch { background: #F3EDE0 radial-gradient(circle at 20% 30%, rgba(117,91,54,.12) 0 1px, transparent 1.5px); background-size: 12px 14px; }
+.paper-option--ruled .paper-swatch { background: repeating-linear-gradient(to bottom, #F4F0E6 0 8px, #CAD4D3 9px, #F4F0E6 10px); }
+.paper-option--kraft .paper-swatch { background: #C8A978 radial-gradient(circle, rgba(71,48,24,.18) 0 1px, transparent 1.5px); background-size: 9px 11px; }
+.paper-option--midnight .paper-swatch { background: radial-gradient(circle at 70% 25%, rgba(129,140,248,.35), transparent 18%), #171B28; }
+.share-tip { display: flex; gap: 8px; margin: 24px 7px 0; padding: 12px; border: 1px solid rgba(129,140,248,.12); border-radius: 10px; color: #5F6980; background: rgba(99,102,241,.035); }
+.share-tip > span { color: #818CF8; font-size: 10px; }
+.share-tip p { font-size: 10px; line-height: 1.6; }
+.share-preview-shell { min-width: 0; display: flex; flex-direction: column; align-items: center; padding: 18px 24px 10px; background: radial-gradient(circle at 50% 20%, #222736 0, #171B25 46%, #131620 100%); }
+.share-preview-scroll { width: 100%; flex: 1; min-height: 0; overflow: auto; padding: 10px max(20px, calc((100% - 720px) / 2)) 28px; }
+.share-preview-caption { padding-top: 8px; color: #525B6D; font-size: 10px; letter-spacing: 0.04em; }
+.share-card { width: 720px; min-height: 960px; overflow: hidden; color: #352F29; background-color: #F3EDE0; box-shadow: 0 18px 55px rgba(0,0,0,.34); }
+.share-card-inner { min-height: 960px; padding: 64px 72px 52px; background-image: linear-gradient(90deg, rgba(77,52,25,.025), transparent 12%, transparent 88%, rgba(77,52,25,.025)); }
+.share-card--ivory { background-image: radial-gradient(circle at 14% 18%, rgba(104,76,44,.11) 0 0.6px, transparent 1px), radial-gradient(circle at 78% 64%, rgba(104,76,44,.08) 0 0.7px, transparent 1.2px); background-size: 17px 19px, 23px 29px; }
+.share-card--ruled { background-color: #F4F0E6; background-image: repeating-linear-gradient(to bottom, transparent 0 31px, rgba(91,121,125,.17) 32px, transparent 33px); }
+.share-card--ruled .share-card-inner { background-image: linear-gradient(90deg, transparent 0 47px, rgba(188,88,71,.22) 48px, transparent 49px); }
+.share-card--kraft { color: #3E2E20; background-color: #C7A777; background-image: radial-gradient(circle, rgba(74,45,21,.14) 0 .7px, transparent 1px), radial-gradient(circle, rgba(255,244,210,.13) 0 .5px, transparent 1px); background-size: 13px 17px, 19px 23px; }
+.share-card--midnight { color: #D8DCE8; background: radial-gradient(circle at 82% 5%, rgba(100,112,201,.18), transparent 21%), radial-gradient(circle at 12% 70%, rgba(57,74,120,.13), transparent 25%), #161A25; }
+.share-card--midnight .share-card-inner { background-image: linear-gradient(90deg, rgba(255,255,255,.018), transparent 15%, transparent 85%, rgba(255,255,255,.018)); }
+.share-brand-row { display: flex; align-items: center; gap: 9px; color: #8B7257; font-size: 9px; font-weight: 800; letter-spacing: .15em; }
+.share-brand-mark { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid currentColor; border-radius: 50%; font: italic 700 12px Georgia, serif; }
+.share-brand-row i { width: 24px; height: 1px; background: currentColor; opacity: .38; }
+.share-card h1 { margin: 34px 0 14px; font: 700 34px/1.32 Georgia, 'Songti SC', 'Noto Serif SC', serif; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.share-card-meta { display: flex; flex-wrap: wrap; gap: 7px 14px; color: #907E6B; font-size: 10px; letter-spacing: .03em; }
+.share-rule { display: flex; align-items: center; gap: 12px; margin: 28px 0; color: #9B7752; font-size: 9px; }
+.share-rule::before, .share-rule::after { content: ''; height: 1px; flex: 1; background: currentColor; opacity: .28; }
+.share-markdown { font: 15px/1.95 Georgia, 'Songti SC', 'Noto Serif SC', serif; overflow-wrap: anywhere; }
+.share-markdown :deep(h1), .share-markdown :deep(h2), .share-markdown :deep(h3) { margin: 30px 0 10px; font-family: Georgia, 'Songti SC', serif; line-height: 1.35; }
+.share-markdown :deep(h1) { font-size: 23px; }.share-markdown :deep(h2) { font-size: 19px; }.share-markdown :deep(h3) { font-size: 16px; }
+.share-markdown :deep(p), .share-markdown :deep(ul), .share-markdown :deep(ol), .share-markdown :deep(pre), .share-markdown :deep(blockquote), .share-markdown :deep(table) { margin-bottom: 16px; }
+.share-markdown :deep(ul), .share-markdown :deep(ol) { padding-left: 24px; }.share-markdown :deep(li) { margin-bottom: 5px; }
+.share-markdown :deep(blockquote) { margin-left: 0; padding: 12px 16px; border-left: 2px solid #9B7752; background: rgba(103,75,46,.06); }
+.share-markdown :deep(code) { padding: 2px 5px; border-radius: 3px; background: rgba(69,53,39,.09); font: 12px/1.5 ui-monospace, monospace; }
+.share-markdown :deep(pre) { padding: 14px 16px; overflow: hidden; border: 1px solid rgba(77,57,38,.13); border-radius: 6px; background: rgba(54,43,32,.07); white-space: pre-wrap; }
+.share-markdown :deep(pre code) { padding: 0; background: transparent; }
+.share-markdown :deep(img) { max-width: 100%; height: auto; border-radius: 5px; }
+.share-markdown :deep(table) { width: 100%; border-collapse: collapse; font-size: 12px; }.share-markdown :deep(th), .share-markdown :deep(td) { padding: 7px 9px; border: 1px solid rgba(77,57,38,.18); text-align: left; }
+.share-markdown :deep(a), .share-markdown :deep(.wikilink) { color: inherit; text-decoration: underline; text-decoration-color: rgba(125,91,57,.45); }
+.share-card--midnight .share-brand-row, .share-card--midnight .share-card-meta, .share-card--midnight .share-rule { color: #8992C7; }
+.share-card--midnight .share-markdown :deep(blockquote) { border-color: #7781BC; background: rgba(129,140,248,.07); }
+.share-card--midnight .share-markdown :deep(code), .share-card--midnight .share-markdown :deep(pre) { color: #DCE0EC; background: rgba(255,255,255,.055); border-color: rgba(255,255,255,.1); }
+.share-card-footer { display: flex; align-items: center; gap: 12px; margin-top: 44px; color: #907E6B; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.share-footer-line { flex: 1; height: 1px; background: currentColor; opacity: .28; }.share-footer-dot { color: #9B7752; }
+.share-dialog-footer { display: flex; align-items: center; justify-content: flex-end; gap: 20px; padding: 14px 24px; border-top: 1px solid rgba(148,163,184,.1); background: #0D1018; }
+.share-dialog-footer > span { color: #515A6E; font-size: 10px; }
+.share-download { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border: 0; border-radius: 9px; background: linear-gradient(135deg, #7377F2, #5559D9); color: #fff; box-shadow: 0 7px 22px rgba(79,70,229,.26); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.share-download:hover { filter: brightness(1.08); }.share-download:disabled { opacity: .65; cursor: wait; }.share-download svg { width: 16px; }
+.share-spinner { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.28); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes share-fade { from { opacity: 0; } } @keyframes share-rise { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 
 .btn-delete {
   display: flex;
@@ -2917,6 +3159,24 @@ onUnmounted(() => {
 /* ── Responsive: Mobile ── */
 @media (max-width: 768px) {
 
+  .share-overlay { padding: 0; place-items: stretch; }
+  .share-dialog { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+  .share-dialog-header { padding: 16px 18px 14px; }
+  .share-dialog-header h2 { font-size: 18px; }
+  .share-dialog-header p { display: none; }
+  .share-workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .paper-picker { display: flex; gap: 7px; padding: 10px 12px; overflow-x: auto; border-right: 0; border-bottom: 1px solid rgba(148,163,184,.1); }
+  .paper-picker-label, .share-tip { display: none; }
+  .paper-option { min-width: 120px; grid-template-columns: 28px 1fr; padding: 7px; margin: 0; }
+  .paper-option svg { display: none; }
+  .paper-swatch { width: 28px; height: 28px; }
+  .paper-option small { display: none; }
+  .share-preview-shell { padding: 10px 8px 6px; }
+  .share-preview-scroll { padding: 8px 12px 22px; }
+  .share-dialog-footer { padding: 10px 14px; }
+  .share-dialog-footer > span { display: none; }
+  .share-download { width: 100%; justify-content: center; padding: 11px 18px; }
+
   /* Sidebar: slide-in overlay */
   .sidebar {
     position: fixed;
@@ -3407,4 +3667,3 @@ onUnmounted(() => {
   background: rgba(251,191,36,0.06);
 }
 </style>
-
