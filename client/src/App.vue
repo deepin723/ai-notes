@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useAuth, SignIn } from '@clerk/vue'
 import ApiKeySetup from './components/ApiKeySetup.vue'
 import NoteApp from './components/NoteApp.vue'
+import LabDrawer from './components/LabDrawer.vue'
 
 const { isSignedIn, getToken } = useAuth()
 
@@ -85,6 +86,7 @@ const onOpenSettings = () => { showSetup.value = true }
     <SignIn />
   </div>
   <template v-else>
+    <LabDrawer />
     <ApiKeySetup
       v-if="showSetup"
       :initial-key="apiKey"
