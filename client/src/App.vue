@@ -5,7 +5,8 @@ import ApiKeySetup from './components/ApiKeySetup.vue'
 import NoteApp from './components/NoteApp.vue'
 import LabDrawer from './components/LabDrawer.vue'
 
-const { isSignedIn, getToken } = useAuth()
+const OWNER_ID = 'user_3DCBXMtmT0LTnBCs8DtuKN2csFE'
+const { isSignedIn, getToken, userId } = useAuth()
 
 const apiKey = ref(localStorage.getItem('vki_api_key') || '')
 const baseUrl = ref(localStorage.getItem('vki_base_url') || 'https://bobdong.cn/v1')
@@ -85,6 +86,11 @@ const onOpenSettings = () => { showSetup.value = true }
   <div v-if="!isSignedIn" class="auth-wall">
     <SignIn />
   </div>
+  <div v-else-if="userId !== OWNER_ID" class="auth-wall auth-denied">
+    <span>PRIVATE ACCESS</span>
+    <h1>此账号没有访问权限</h1>
+    <p>AI Notes 仅供所有者个人学习使用。</p>
+  </div>
   <template v-else>
     <LabDrawer />
     <ApiKeySetup
@@ -115,4 +121,13 @@ const onOpenSettings = () => { showSetup.value = true }
   justify-content: center;
   background: #0f1117;
 }
+.auth-denied {
+  flex-direction: column;
+  gap: 12px;
+  color: #e2e8f0;
+  text-align: center;
+}
+.auth-denied span { color: #818cf8; font: 800 10px/1 ui-monospace, monospace; letter-spacing: .2em; }
+.auth-denied h1 { margin: 0; font-size: 24px; }
+.auth-denied p { margin: 0; color: #94a3b8; font-size: 13px; }
 </style>
