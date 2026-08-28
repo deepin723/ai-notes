@@ -144,16 +144,21 @@ const listNotes = (userId) => {
   return fs.readdirSync(dir)
     .filter(f => f.endsWith('.md'))
     .map(f => {
-      const { data, content } = matter.read(path.join(dir, f))
-      if (!data.id) return null
-      const preview = content.trim()
-        .slice(0, 150)
-        .replace(/#{1,6}\s/g, '')
-        .replace(/\*\*/g, '')
-        .replace(/\*/g, '')
-        .replace(/\[\[([^\]]+)\]\]/g, '$1')
-        .trim()
-      return { ...data, preview }
+      try {
+        const { data, content } = matter.read(path.join(dir, f))
+        if (!data.id) return null
+        const preview = content.trim()
+          .slice(0, 150)
+          .replace(/#{1,6}\s/g, '')
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/\[\[([^\]]+)\]\]/g, '$1')
+          .trim()
+        return { ...data, preview }
+      } catch (err) {
+        console.error(`Skipping unreadable note ${f}: ${err.message}`)
+        return null
+      }
     })
     .filter(Boolean)
     .sort((a, b) => new Date(b.updated) - new Date(a.updated))
